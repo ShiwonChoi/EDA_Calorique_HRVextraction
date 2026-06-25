@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from lib.PPG_extract.ppg_preprocess import match_events, clean_events, zero_reference, crop_dataset
+from lib.PPG_extract.ppg_preprocess import match_events, clean_events, zero_reference, crop_dataset, correct_time
 
 
 def load_ppg(participant_path, show=True):
@@ -196,6 +196,8 @@ def load_and_clean_ppg(participants_path, show=False):
     df_ppg, df_events     = load_ppg(participants_path)
 
     df_events             = clean_events(df_events)
+
+    df_ppg                = zero_reference(df_ppg, df_events)
 
     df_ppg                = crop_dataset(df_ppg, df_events)
 
