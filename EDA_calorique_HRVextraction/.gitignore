@@ -1,0 +1,19 @@
+# Research data - too large for git, store on NAS
+Data/
+
+# macOS junk
+.DS_Store
+**/.DS_Store
+
+# Windows junk
+Thumbs.db
+**/Thumbs.db
+
+# LibreOffice/Excel lock files
+~$*
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
