@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from lib.PPG_extract.ppg_preprocess import match_events, clean_events, zero_reference, crop_dataset, correct_time
+from lib.PPG_extract.ppg_preprocess import match_events, clean_events, merge_time, zero_reference, crop_dataset
 
 
 def load_ppg(participant_path, show=True):
@@ -124,7 +124,7 @@ def resample_signal(df, badsegments, fs_new):
 
     # Resample Signal
     df_resamp = df.copy().iloc[:, 1:]
-    df_resamp_nan = df_resamp.resample(period_str).mean()
+    df_resamp_nan = df_resamp.resample(period_str).mean(numeric_only=True)
     df_resamp_linear = df_resamp_nan.interpolate()
     df_resamp_akima = df_resamp_nan.interpolate('akima')
 
@@ -193,15 +193,18 @@ def check_signals_ppg(df, badsegments, event_dict):
 
 
 def load_and_clean_ppg(participants_path, show=False):
+    # Importing PPG & Cleaning Events
     df_ppg, df_events     = load_ppg(participants_path)
-
     df_events             = clean_events(df_events)
-
-    df_ppg                = zero_reference(df_ppg, df_events)
-
+    df_ppg                = merge_time(df_ppg)
     df_ppg                = crop_dataset(df_ppg, df_events)
+    df_ppg                = zero_reference(df_ppg)
+    df_ppg                = df_ppg.rename(columns={'Internal ADC A13': 'PPG'})
 
-    df_ppg, df_events, fs = correct_time(df_ppg, df_events)
+    # Indexing time_seconds and sampling rate
+    df_ppg.index         = pd.to_timedelta(df_ppg['abs_zero_ref'], unit='ms')
+    df_ppg['time_seconds'] = df_ppg['abs_zero_ref'] / 1000
+    fs                   = 1000 / df_ppg['abs_zero_ref'].diff().iloc[1]
 
     # Finding missing samples
     badsegments           = find_bad_segments(df_ppg)

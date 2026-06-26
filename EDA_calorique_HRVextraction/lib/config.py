@@ -46,10 +46,21 @@ main_dir = Path(__file__).parent
 base_dir = Path(__file__).resolve().parents[1]
 
 # Build paths to Data folders
-DATA_DIR = base_dir / "Data" 
-CORR_DIR = base_dir / "Data" / "Processed_PPG"
+DATA_DIR = base_dir / "Data"
+
+# Participant folders: root of raw per-participant data (each SC_## lives here)
+PARTICIPANTS_DIR = DATA_DIR
+
+# Output folder for processed PPG results
+PROCESSED_PPG_DIR = DATA_DIR / "Processed_PPG"
+PROCESSED_PPG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Directory for results
 output_dir = base_dir / "Results"
 output_dir.mkdir(parents=True, exist_ok=True)
 output_file = output_dir / "processed_ppg_results.csv"
+
+
+def get_participant_paths(root=PARTICIPANTS_DIR, pattern="SC_*"):
+    """Return sorted list of SC_## participant folders found under root."""
+    return sorted(root.glob(pattern))

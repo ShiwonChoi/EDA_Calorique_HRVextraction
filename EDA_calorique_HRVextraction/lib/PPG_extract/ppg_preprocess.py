@@ -177,11 +177,53 @@ def clean_events(df_events):
     return df_events[mask].reset_index(drop=True)
 
 
-def zero_reference(df_ppg, df_events, offset=0):
+def merge_time(df_ppg):
+    """
+    Adds two zero-referenced time columns to df_ppg:
+
+    rel_zero_ref — each trial independently zeroed to its own first sample.
+                   Shares the same time base as df_events['time_since_connected_ms']
+                   so events can be aligned per-trial.
+
+    abs_zero_ref — continuous timeline across all trials: each trial is zeroed
+                   relative to its own first sample, then offset by the cumulative
+                   end-time of all preceding trials so the full recording is
+                   represented as one unbroken axis.
+    """
     df_ppg = df_ppg.copy()
-    df_ppg["Time Stamp"] = (
-        df_ppg.groupby("trial", sort=False)["Time Stamp"]
-        .transform(lambda ts: ts - ts.iloc[0] + offset)
+    running_offset = 0
+    rel_parts, abs_parts = [], []
+
+    for trial in sorted(df_ppg["trial"].unique()):
+        mask = df_ppg["trial"] == trial
+        trial_ts = df_ppg.loc[mask, "Time Stamp"]
+        rel = trial_ts - trial_ts.iloc[0]
+        abs_ = rel + running_offset
+        rel_parts.append(rel)
+        abs_parts.append(abs_)
+        running_offset = abs_.iloc[-1]
+
+    df_ppg["rel_zero_ref"] = pd.concat(rel_parts)
+    df_ppg["abs_zero_ref"] = pd.concat(abs_parts)
+    return df_ppg
+
+
+def zero_reference(df_ppg):
+    """
+    Re-zeros rel_zero_ref and abs_zero_ref after crop_dataset has trimmed the
+    leading rows of each trial.
+
+    abs_zero_ref is shifted so the first remaining sample sits at 0, preserving
+    the continuous spacing between trials.
+
+    rel_zero_ref is shifted per-trial so the first remaining sample of each
+    trial sits at 0, keeping it aligned with df_events['time_since_connected_ms'].
+    """
+    df_ppg = df_ppg.copy()
+    df_ppg["abs_zero_ref"] = df_ppg["abs_zero_ref"] - df_ppg["abs_zero_ref"].iloc[0]
+    df_ppg["rel_zero_ref"] = (
+        df_ppg.groupby("trial", sort=False)["rel_zero_ref"]
+        .transform(lambda ts: ts - ts.iloc[0])
     )
     return df_ppg
 
@@ -227,11 +269,18 @@ def correct_time(df, df_events):
 
 
 def crop_dataset(df_ppg, df_events):
-    if df_events is not None and len(df_events) > 0:
-        first_marker = df_events['time_since_connected_ms'].iloc[0]
-        last_marker  = df_events['time_since_connected_ms'].iloc[-1]
-        df_ppg = df_ppg.loc[
-            (df_ppg['Time Stamp'] >= first_marker) &
-            (df_ppg['Time Stamp'] <= last_marker)
-        ]
-    return df_ppg
+    if df_events is None or len(df_events) == 0:
+        return df_ppg
+
+    keep = pd.Series(False, index=df_ppg.index)
+    for trial in df_ppg["trial"].unique():
+        ev_ts = df_events.loc[df_events["trial"] == trial, "time_since_connected_ms"]
+        if ev_ts.empty:
+            continue
+        ppg_trial = df_ppg["trial"] == trial
+        keep |= (
+            ppg_trial
+            & (df_ppg["rel_zero_ref"] >= ev_ts.iloc[0])
+            & (df_ppg["rel_zero_ref"] <= ev_ts.iloc[-1])
+        )
+    return df_ppg.loc[keep]
