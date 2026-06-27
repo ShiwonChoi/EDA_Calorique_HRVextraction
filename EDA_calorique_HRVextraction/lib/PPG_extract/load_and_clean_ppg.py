@@ -2,10 +2,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from lib.PPG_extract.ppg_preprocess import match_events, clean_events, merge_time, zero_reference, crop_dataset
+from lib.PPG_extract.ppg_preprocess import match_events, clean_events
 
-
-def load_ppg(participant_path, show=True):
+def load_ppg(participant_path, trial_filter=None, show=True):
     """
     Load shimmer PPG and events CSVs for a single participant.
 
@@ -30,6 +29,11 @@ def load_ppg(participant_path, show=True):
         raise FileNotFoundError(
             f"No 'Stress measures' folder found in {participant_path}"
         )
+
+    if trial_filter is not None and isinstance(trial_filter, str):
+        trial_filter = {trial_filter}
+    elif trial_filter is not None:
+        trial_filter = set(trial_filter)
 
     shimmer_files = sorted(stress_dir.glob("shimmer_*.csv"))
     if not shimmer_files:
@@ -58,6 +62,9 @@ def load_ppg(participant_path, show=True):
         trial         = parts[1]                     # e.g. "Trial01"
         condition     = "_".join(parts[2:-2])        # e.g. "baseline", "LW", "RW"
 
+        if trial_filter is not None and trial not in trial_filter:
+            continue
+
         # Shimmer CSV: row 0 = column names, rows 1-2 = unit labels (skip)
         df_shimmer = pd.read_csv(shimmer_file, header=0, skiprows=[1, 2])
         df_shimmer["participant"] = participant_id
@@ -84,7 +91,6 @@ def load_ppg(participant_path, show=True):
     df_ppg    = pd.concat(shimmer_dfs, ignore_index=True)
     df_events = pd.concat(events_dfs,  ignore_index=True) if events_dfs else pd.DataFrame()
 
-
     # Cross-check JSON vs CSV event files; raise on any mismatch
     event_check = match_events(participant_path)
     failed = [r for r in event_check if r["status"] != "OK"]
@@ -99,7 +105,7 @@ def load_ppg(participant_path, show=True):
             "Event file mismatch detected — aborting load:\n" + "\n".join(lines)
         )
 
-    return df_ppg, df_events
+    return df_ppg, df_events, participant_id
 
 
 def find_bad_segments(df):
@@ -119,21 +125,24 @@ def find_bad_segments(df):
 
 def resample_signal(df, badsegments, fs_new):
 
-    time_idx = df.index
+    time_idx  = df.index
     period_str = str(1000/fs_new)+'ms'
 
-    # Resample Signal
-    df_resamp = df.copy().iloc[:, 1:]
+    cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+
+    # Resample numeric signal columns; akima preserves PPG waveform shape without overshoot
+    df_resamp     = df.copy().iloc[:, 1:]
     df_resamp_nan = df_resamp.resample(period_str).mean(numeric_only=True)
-    df_resamp_linear = df_resamp_nan.interpolate()
-    df_resamp_akima = df_resamp_nan.interpolate('akima')
+    df_resamp     = df_resamp_nan.interpolate('akima')
 
-    badsegments_df = pd.DataFrame(badsegments, time_idx)
-    badsegments_df_r = badsegments_df.copy().resample(period_str).ffill()
-    badsegments_r = badsegments_df_r.values.squeeze()
+    badsegments_df   = pd.DataFrame(badsegments, time_idx)
+    badsegments_df_r = badsegments_df.resample(period_str).max()
+    badsegments_r    = badsegments_df_r.fillna(0).values.squeeze().astype(bool)
 
-    #choose interpolation method
-    df_resamp = df_resamp_linear
+    # Reindex categorical columns (trial, condition, participant) onto the new grid
+    if cat_cols:
+        df_resamp[cat_cols] = df[cat_cols].reindex(df_resamp.index, method='ffill')
+
     Time_s_resamp = df_resamp.index.total_seconds()
     df_resamp['time_seconds'] = Time_s_resamp
 
@@ -192,29 +201,46 @@ def check_signals_ppg(df, badsegments, event_dict):
     plt.xlabel('time_seconds')
 
 
-def load_and_clean_ppg(participants_path, show=False):
-    # Importing PPG & Cleaning Events
-    df_ppg, df_events     = load_ppg(participants_path)
-    df_events             = clean_events(df_events)
-    df_ppg                = merge_time(df_ppg)
-    df_ppg                = crop_dataset(df_ppg, df_events)
-    df_ppg                = zero_reference(df_ppg)
-    df_ppg                = df_ppg.rename(columns={'Internal ADC A13': 'PPG'})
+def load_and_clean_ppg(participants_path, trial_filter=None, show=False):
+    """
+    Args:
+        participants_path : Path to the SC_## participant folder.
+        trial_filter      : Optional str or list of str.  When given, only the named
+                            trial(s) are loaded and processed.  Pass a single trial
+                            name (e.g. "Trial01") or a list.  None → all trials.
+        show              : If True, display raw signal quality plot after loading.
+    """
+    df_ppg_raw, df_events, participant_id = load_ppg(participants_path, trial_filter=trial_filter)
+    df_events = clean_events(df_events)
 
-    # Indexing time_seconds and sampling rate
-    df_ppg.index         = pd.to_timedelta(df_ppg['abs_zero_ref'], unit='ms')
-    df_ppg['time_seconds'] = df_ppg['abs_zero_ref'] / 1000
-    fs                   = 1000 / df_ppg['abs_zero_ref'].diff().iloc[1]
+    df_ppg = df_ppg_raw.copy()
+    df_ppg = df_ppg.rename(columns={'Internal ADC A13': 'PPG'})
 
-    # Finding missing samples
-    badsegments           = find_bad_segments(df_ppg)
+    ts  = df_ppg["Time Stamp"].astype(float)
+    rel = ts - ts.iloc[0]
+    df_ppg["rel_zero_ref"]  = rel
+    df_ppg["abs_zero_ref"]  = rel          # single trial: abs == rel (no offset)
+    df_ppg.index            = pd.to_timedelta(rel, unit='ms')
+    df_ppg["time_seconds"]  = df_ppg["rel_zero_ref"] / 1000
 
-    # Resample Signal
+    dup_mask = df_ppg.index.duplicated(keep='first')
+    n_dup    = int(dup_mask.sum())
+    if n_dup:
+        trial_label = df_ppg["trial"].iloc[0]
+        print(f"  {trial_label}: {n_dup} duplicate timestamps removed")
+        df_ppg = df_ppg[~dup_mask]
+
+    badsegments             = find_bad_segments(df_ppg)
     df_ppg, fs, badsegments = resample_signal(df_ppg, badsegments, fs_new=250)
 
-    # Check signals
-    if show: 
+    # Replace interpolated values with exact regular-grid times
+    rel_ms                 = df_ppg.index.total_seconds() * 1000
+    df_ppg["rel_zero_ref"] = rel_ms
+    df_ppg["abs_zero_ref"] = rel_ms
+    df_ppg["time_seconds"] = rel_ms / 1000
+
+    if show:
         check_signals_ppg(df_ppg, badsegments, df_events)
         plt.show()
-    
-    return df_ppg, df_events, fs, badsegments
+
+    return df_ppg, df_events, fs, badsegments, participant_id

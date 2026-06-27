@@ -47,6 +47,7 @@ base_dir = Path(__file__).resolve().parents[1]
 
 # Build paths to Data folders
 DATA_DIR = base_dir / "Data"
+CORR_DIR = DATA_DIR / "Processed_PPG"
 
 # Participant folders: root of raw per-participant data (each SC_## lives here)
 PARTICIPANTS_DIR = DATA_DIR

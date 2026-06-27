@@ -1,9 +1,9 @@
 from lib.config import PARTICIPANTS_DIR, PROCESSED_PPG_DIR, get_participant_paths
-from lib.PPG_extract.load_and_clean_ppg import load_and_clean_ppg
+from lib.CAL_process import full_process_single
 
 # --- Single participant call ---
-participant_path = PARTICIPANTS_DIR / "SC_01"
-df_ppg, df_events, fs, badsegments = load_and_clean_ppg(participant_path, show=True)
+participant_path = PARTICIPANTS_DIR / "SC_02"
+results = full_process_single(participant_path, show=True)
 
 print(df_ppg.head())
 print(df_events.head())

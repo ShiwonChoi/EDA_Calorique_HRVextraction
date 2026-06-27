@@ -201,7 +201,10 @@ def merge_time(df_ppg):
         abs_ = rel + running_offset
         rel_parts.append(rel)
         abs_parts.append(abs_)
-        running_offset = abs_.iloc[-1]
+        # Advance by one sample period so the next trial's first sample
+        # doesn't collide with this trial's last sample in abs_zero_ref
+        sample_ms = float(trial_ts.diff().median())
+        running_offset = abs_.iloc[-1] + sample_ms
 
     df_ppg["rel_zero_ref"] = pd.concat(rel_parts)
     df_ppg["abs_zero_ref"] = pd.concat(abs_parts)
@@ -210,22 +213,18 @@ def merge_time(df_ppg):
 
 def zero_reference(df_ppg):
     """
-    Re-zeros rel_zero_ref and abs_zero_ref after crop_dataset has trimmed the
-    leading rows of each trial.
-
-    abs_zero_ref is shifted so the first remaining sample sits at 0, preserving
-    the continuous spacing between trials.
-
-    rel_zero_ref is shifted per-trial so the first remaining sample of each
-    trial sits at 0, keeping it aligned with df_events['time_since_connected_ms'].
+    Returns
+    -------
+    df_ppg : DataFrame with abs_zero_ref zeroed to the first sample.
+             rel_zero_ref is unchanged — it is already connection-relative
+             (same origin as time_since_connected_ms and peak_time_s).
+    t0     : {'abs_zero_ref': float} — ms offset subtracted from abs_zero_ref.
     """
     df_ppg = df_ppg.copy()
-    df_ppg["abs_zero_ref"] = df_ppg["abs_zero_ref"] - df_ppg["abs_zero_ref"].iloc[0]
-    df_ppg["rel_zero_ref"] = (
-        df_ppg.groupby("trial", sort=False)["rel_zero_ref"]
-        .transform(lambda ts: ts - ts.iloc[0])
-    )
-    return df_ppg
+    t0 = {}
+    t0["abs_zero_ref"] = float(df_ppg["abs_zero_ref"].iloc[0])
+    df_ppg["abs_zero_ref"] = df_ppg["abs_zero_ref"] - t0["abs_zero_ref"]
+    return df_ppg, t0
 
 
 
@@ -266,6 +265,50 @@ def correct_time(df, df_events):
         df_events.insert(1, 'time_seconds', Time_s)
 
     return df, df_events, fs
+
+
+def extract_task_epochs(df_ppg, df_events):
+    """
+    Crop df_ppg to the event window [first_event, last_event] per trial.
+
+    Uses rel_zero_ref (exact after per-trial resampling) to align with
+    df_events['time_since_connected_ms'].  All events in between the first
+    and last are treated as markers only, not additional crop boundaries.
+
+    Returns:
+        df_epoch     : df_ppg rows within the event window (all trials combined,
+                       abs_zero_ref timeline preserved).
+        epoch_bounds : {trial: {"rel_lo","rel_hi","abs_lo","abs_hi"}} in ms.
+    """
+    epoch_bounds = {}
+    keep = pd.Series(False, index=df_ppg.index)
+
+    for trial in sorted(df_ppg["trial"].dropna().unique()):
+        ev_ms  = df_events.loc[df_events["trial"] == trial, "time_since_connected_ms"]
+        t_mask = df_ppg["trial"] == trial
+
+        if ev_ms.empty:
+            print(f"  {trial}: no events — keeping full trial")
+            keep |= t_mask
+            continue
+
+        first_ev = float(ev_ms.min())
+        last_ev  = float(ev_ms.max())
+        t_start  = float(df_ppg.loc[t_mask, "abs_zero_ref"].iloc[0])
+
+        epoch_bounds[trial] = {
+            "rel_lo": first_ev, "rel_hi": last_ev,
+            "abs_lo": t_start + first_ev, "abs_hi": t_start + last_ev,
+        }
+
+        ep_mask = t_mask & (df_ppg["rel_zero_ref"] >= first_ev) & (df_ppg["rel_zero_ref"] <= last_ev)
+        keep   |= ep_mask
+
+        n_kept  = int(ep_mask.sum())
+        n_trial = int(t_mask.sum())
+        print(f"  {trial}: [{first_ev/1000:.1f}s – {last_ev/1000:.1f}s]  {n_kept}/{n_trial} rows kept")
+
+    return df_ppg.loc[keep], epoch_bounds
 
 
 def crop_dataset(df_ppg, df_events):
