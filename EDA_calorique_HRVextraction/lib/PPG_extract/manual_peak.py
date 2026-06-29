@@ -144,20 +144,20 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
     """
     participant_id = df_ppg["participant"].iloc[0] if "participant" in df_ppg.columns else "unknown"
     trial     = df_ppg["trial"].iloc[0]
-    trial_rel = df_ppg["rel_zero_ref"].values
+    trial_rel = df_ppg["rel_zero_ref (ms)"].values
     print(f"\nProcessing PPG signal for {participant_id} — {trial}...")
 
     # Event window bounds
     epoch_bounds = {}
     ev_ms = df_events.loc[df_events["trial"] == trial, "time_since_connected_ms"]
     if not ev_ms.empty:
-        t_start = float(df_ppg["abs_zero_ref"].iloc[0])
+        t_start = float(df_ppg["rel_zero_ref (ms)"].iloc[0])
         first_ev, last_ev = float(ev_ms.min()), float(ev_ms.max())
         epoch_bounds[trial] = {
             "rel_lo": first_ev, "rel_hi": last_ev,
             "abs_lo": t_start + first_ev, "abs_hi": t_start + last_ev,
         }
-        print(f"  Event window: [{first_ev/1000:.1f}s – {last_ev/1000:.1f}s]")
+        print(f"  Event window: [{first_ev/1000:.3f}s – {last_ev/1000:.3f}s]")
 
     if not corr_paths:
         print("  No corrected paths provided — using auto peaks only")

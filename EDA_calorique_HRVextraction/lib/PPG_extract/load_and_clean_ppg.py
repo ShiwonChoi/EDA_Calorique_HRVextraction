@@ -218,11 +218,12 @@ def load_and_clean_ppg(participants_path, trial_filter=None, show=False):
 
     ts  = df_ppg["Time Stamp"].astype(float)
     rel = ts - ts.iloc[0]
-    df_ppg["rel_zero_ref"]  = rel
-    df_ppg["abs_zero_ref"]  = rel          # single trial: abs == rel (no offset)
+    df_ppg["rel_zero_ref (ms)"]  = rel
+    df_ppg["abs_zero_ref (ms)"]  = rel
     df_ppg.index            = pd.to_timedelta(rel, unit='ms')
-    df_ppg["time_seconds"]  = df_ppg["rel_zero_ref"] / 1000
+    df_ppg["time_seconds"]  = df_ppg["rel_zero_ref (ms)"] / 1000
 
+    # Remove duplicate recording
     dup_mask = df_ppg.index.duplicated(keep='first')
     n_dup    = int(dup_mask.sum())
     if n_dup:
@@ -230,13 +231,14 @@ def load_and_clean_ppg(participants_path, trial_filter=None, show=False):
         print(f"  {trial_label}: {n_dup} duplicate timestamps removed")
         df_ppg = df_ppg[~dup_mask]
 
+    # Bad segments & resampling
     badsegments             = find_bad_segments(df_ppg)
     df_ppg, fs, badsegments = resample_signal(df_ppg, badsegments, fs_new=250)
 
     # Replace interpolated values with exact regular-grid times
     rel_ms                 = df_ppg.index.total_seconds() * 1000
-    df_ppg["rel_zero_ref"] = rel_ms
-    df_ppg["abs_zero_ref"] = rel_ms
+    df_ppg["rel_zero_ref (ms)"] = rel_ms
+    df_ppg["abs_zero_ref (ms)"] = rel_ms
     df_ppg["time_seconds"] = rel_ms / 1000
 
     if show:
