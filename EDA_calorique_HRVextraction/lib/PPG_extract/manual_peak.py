@@ -152,7 +152,7 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
     ev_ms = df_events.loc[df_events["trial"] == trial, "time_since_connected_ms"]
     if not ev_ms.empty:
         t_start = float(df_ppg["rel_zero_ref (ms)"].iloc[0])
-        first_ev, last_ev = float(ev_ms.min()), float(ev_ms.max())
+        first_ev, last_ev = float(ev_ms.iloc[0]), float(ev_ms.iloc[-1])
         epoch_bounds[trial] = {
             "rel_lo": first_ev, "rel_hi": last_ev,
             "abs_lo": t_start + first_ev, "abs_hi": t_start + last_ev,

@@ -5,6 +5,13 @@ import matplotlib.pyplot as plt
 from lib.PPG_extract.load_and_clean_ppg import load_and_clean_ppg
 from lib.PPG_extract.manual_peak import load_corrected_peaks, process_rri_intervals, plot_corr_peaks
 from lib.Metric_extraction.RRI_preprocess import preprocess_pipeline, preprocess_visualize, plot_preprocessing_steps, validate_intervals
+from lib.Metric_extraction.HRV_temp_extract import get_temp_metrics
+from lib.Metric_extraction.HRV_temp_bin import bin_temp_30s
+from lib.Metric_extraction.HRV_freq_extract import (
+    run_cwt_compute, run_cwt_task, extract_band_power_cwt, band_results_to_df, plot_cwt_scalogram,
+)
+from lib.Metric_extraction.HRV_freq_bin import bin_totalbandpower, bin_bandpower_30s
+from lib.Metric_extraction.HRV_df import build_result_row
 
 def full_process_single(participant_path, use_physio=True, use_stat=False, show=False):
     """
@@ -12,15 +19,22 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
 
     For each trial (Trial00, Trial01, Trial02) the pipeline runs independently:
         load_and_clean_ppg  → load_corrected_peaks → process_rri_intervals → plot_corr_peaks
+        → RRI preprocessing → global HRV metric extraction
 
-    Per-trial results are collected in signal_list.  Each entry is the NK2 signal
-    DataFrame enriched with time columns and participant / trial / condition labels so
-    entries are self-contained for downstream analysis.  Concatenation into a single
-    combined DataFrame is addressed separately once per-trial processing is complete.
+    CAL_temp collects global temporal HRV rows in long-format (4 rows per
+    metric: raw, diff, pct_change, log_ratio), baseline-referenced against
+    the baseline trial (Trial00).
+
+    CAL_freq collects frequency-domain rows from HRV_freq_bin: for stim
+    trials, raw/diff/pct_change/log_ratio (diff/pct/log baseline-referenced
+    against that same trial's own anticipation period via per_frequency_correction)
+    as a whole-trial total plus 30-s bins; for the baseline trial, raw only,
+    whole-recording, not binned.
 
     Returns:
-        signal_list  (list[pd.DataFrame]) : One DataFrame per trial.
-        participant_id (str)              : Participant identifier (e.g. "P002").
+        participant_id (str)      : Participant identifier (e.g. "P002").
+        CAL_temp       (list[dict]): Global temporal HRV rows (long-format).
+        CAL_freq       (list[dict]): Global frequency HRV rows (long-format).
     """
     participant_path = Path(participant_path)
 
@@ -34,8 +48,11 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
     print(f"\nParticipant folder : {participant_path.name}")
     print(f"Trials found       : {trials}")
 
-    signal_list   = []
-    participant_id = None
+    CAL_temp              = []
+    CAL_freq              = []
+    baseline_temp_raw     = None
+    baseline_per_freq_raw = None
+    participant_id        = None
 
     try:
         for trial in trials:
@@ -74,26 +91,15 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
             # ── 4. Visualise corrected vs auto peaks ───────────────────────
             if show:
                 plot_corr_peaks(signal_t, df_ppg_t, df_events_t, corr_t, participant_id, show=show)
-
-            signal_list.append(signal_t)
             print(f"  {trial} done — signal shape: {signal_t.shape}")
 
 
             # ── 5. Preprocess RRI ───────────────────────
             peak_indices = np.where(signal_t["PPG_Peaks_Corr"] == 1)[0]
             peak_times = signal_t["time_seconds"].iloc[peak_indices].values
-            rri_values = np.diff(peak_times) * 1000 # Convert seconds to ms, length = n_peaks-1
+            rri_values = np.diff(peak_times) * 1000 # Convert seconds to ms
             beat_times = peak_times[:-1]
-
-            # Create RRI column for signal_clean
-            rri_col = np.full(len(signal_t), np.nan)
-            for i in range(len(rri_values)):
-                start_idx = peak_indices[i]
-                end_idx = peak_indices[i + 1]
-                rri_col[start_idx:end_idx] = rri_values[i]
-
-            signal_t["RRI"] = rri_col
-            print(f"RRI col created: {np.sum(~np.isnan(rri_col))} valid samples")
+            print(f"RRI col created: {np.sum(~np.isnan(rri_values))} valid samples")
 
 
             # Resampling : Artifact detection, removal and interpolation
@@ -107,9 +113,9 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
 
             print("\nPreprocessing complete.")
             print(f"  Input:  {len(results['intervals_raw'])} beats (irregular)")
-            print(f"  Output: {len(results['intervals_clean'])} beats cleaned")
-            print(f"  Output: {len(results['intervals_resampled'])} resampled beats")
-            print(f"  Output: {len(results['intervals_filtered'])} samples at {results['fs_resample']} Hz (uniform, filtered)")
+            print(f"  Output: {len(results['intervals_clean'])} beats cleaned") # Temporal HRV
+            print(f"  Output: {len(results['intervals_resampled'])} resampled beats") # Cubic spline interpolation
+            print(f"  Output: {len(results['intervals_filtered'])} samples at {results['fs_resample']} Hz (uniform, filtered)") # Frequency HRV
 
             # Quality Validation
             # -------------------------------------------------------------------------------------------
@@ -136,25 +142,115 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                         print(f"  {key}: {value}")
             
 
-            # ── 6. Extract global HRV metrics ───────────────────────
-            # TODO : Extact HRV metrics
+            # ── 6. Global HRV metrics ───────────────────────────────
+            condition   = df_ppg_t['condition'].iloc[0]
+            rel_time    = float(results['beat_times_clean'][0]) * 1000
+            abs_time    = rel_time  # single trial: abs == rel
 
+            # Task window: first → last event for this trial (seconds, same frame as t_resampled)
+            ev_times_s  = df_events_t['time_since_connected_ms'].values / 1000
+            task_window = (float(ev_times_s[0]), float(ev_times_s[-1]))
 
-            # ── 7. Extract Interval HRV metrics ───────────────────────
-            # TODO : Extract HRV metrics 
+            # ── 6a. Temporal ─────────────────────────────────────────
+            metrics_temp = get_temp_metrics(results['intervals_clean'])
+            if condition == 'baseline':
+                baseline_temp_raw = metrics_temp
+
+            for metric_name, metric_value in metrics_temp.items():
+                bl = baseline_temp_raw[metric_name] #if (condition != 'baseline' and baseline_temp_raw) else float('nan')
+                CAL_temp.extend(build_result_row(
+                    participant_id, trial, condition,
+                    rel_time, abs_time,
+                    metric_name, metric_value, bl,
+                ))
+            print(f"\n  Temporal: {metrics_temp}")
+
+            # 30-s binned temporal metrics — stim trials only (baseline kept whole)
+            if condition != 'baseline':
+                temp_binned = bin_temp_30s(
+                    results['intervals_clean'], results['beat_times_clean'],
+                    trial, condition, task_window, df_events_t, participant_id,
+                    baseline_temp_raw,
+                )
+                CAL_temp.extend(temp_binned.to_dict('records'))
+
+            # ── 6b. Frequency (CWT band power) ────────────────
+            print("  Computing CWT...")
+            cwt_r = run_cwt_compute(results['intervals_filtered'], results['t_resampled'],
+                                    results['fs_resample'], verbose=False)
+
+            if condition == 'baseline':
+                # Trial00 IS the baseline — raw band power only, no
+                # per-frequency correction to run against itself. Its own
+                # per-frequency mean (over its whole window) becomes the
+                # reference other trials are corrected against below.
+                band_results = extract_band_power_cwt(cwt_r)
+                band_df = band_results_to_df(
+                    band_results, participant_id=participant_id,
+                    drop_outside_task_window=False,
+                )
+
+                bl_mask = (cwt_r['times'] >= task_window[0]) & (cwt_r['times'] < task_window[1])
+                baseline_per_freq_raw = np.nanmean(cwt_r['power'][:, bl_mask], axis=1)
+            else:
+                # Per-frequency correction against Trial00's baseline_per_freq_raw,
+                # not a time-masked window of this trial's own CWT matrix
+                # (Trial00 and this trial have independent CWT time axes).
+                task_out = run_cwt_task(
+                    cwt_r, task=trial, participant_id=participant_id,
+                    task_window=task_window,
+                    baseline_per_freq=baseline_per_freq_raw,
+                    verbose=False,
+                )
+                band_df = task_out['band_df']
+
+            # Whole-trial mean per (band, value_type)
+            total = bin_totalbandpower(
+                bandpower=band_df, trial=trial, condition=condition,
+                task_interval=task_window, participant_id=participant_id,
+            )
+            CAL_freq.extend(total.to_dict('records'))
+
+            # 30-s binned bandpower — stim trials only (baseline kept whole)
+            if condition != 'baseline':
+                binned = bin_bandpower_30s(
+                    bandpower=band_df, trial=trial, condition=condition,
+                    task_interval=task_window, df_events_t=df_events_t,
+                    participant_id=participant_id,
+                )
+                CAL_freq.extend(binned.to_dict('records'))
+
+            if show:
+                ev_labels = df_events_t['event_type'].values.tolist()
+                plot_cwt_scalogram(
+                    cwt_r, results['intervals_filtered'], results['t_resampled'],
+                    participant_id=participant_id,
+                    event_times=ev_times_s.tolist(),
+                    event_labels=ev_labels,
+                    show=True,
+                )
+
+            print("  Freq total: " + "  ".join(
+                f"{r['Metric']}.{r['Value_type']}={r['Value']:.4f}"
+                for r in total.to_dict('records')
+            ))
+
+            # ── 7. Interval HRV metrics ──────────────────────────────
+            # TODO : Extract per-interval HRV metrics
 
 
         # TODO : combine the abs zero ref timeline between trials to create a continuous data
 
         print(f"\n{'=' * 55}")
         print(f"  All trials processed for {participant_id}.")
-        print(f"  signal_list length: {len(signal_list)}")
+        print(f"  CAL_temp rows : {len(CAL_temp)}")
+        print(f"  CAL_freq rows : {len(CAL_freq)}")
         print(f"{'=' * 55}")
 
-        return signal_list, participant_id
+        return participant_id, CAL_temp, CAL_freq
 
     except Exception as e:
         import traceback
         print(f"\nERROR processing {participant_path.name}: {e}")
         traceback.print_exc()
-        return [], participant_id
+        return participant_id, CAL_temp, CAL_freq

@@ -36,6 +36,55 @@ ALLSTIMCOND = [
 ]
 
 
+# Default frequency grid — log-spaced for finer resolution in LF/HF
+DEFAULT_FREQ_MIN = 0.02
+DEFAULT_FREQ_MAX = 0.50
+DEFAULT_N_FREQS  = 100
+
+# Adaptive Morlet n_cycles ramp
+DEFAULT_N_CYCLES_LOW  = 5
+DEFAULT_N_CYCLES_HIGH = 15
+
+# Default reflection-padding length (seconds per side).
+# Sized to suppress COI at DEFAULT_FREQ_MIN:
+#   max_half_width = 3 * N_CYCLES_LOW / (2π * FREQ_MIN) ≈ 120s for 0.02 Hz
+DEFAULT_PAD_SECONDS = 120
+
+
+# ============================================================================
+# HRV FREQUENCY BANDS (Task Force 1996) — frequency-domain only
+# ============================================================================
+HRV_BANDS = {
+    'VLF': (0.003, 0.04),
+    'LF':  (0.04,  0.15),
+    'HF':  (0.15,  0.40),
+}
+
+BAND_COLORS = {
+    'VLF':         '#ff9999',
+    'LF':          '#99ccff',
+    'HF':          '#99ff99',
+    'LF_HF_ratio': 'black',
+}
+
+
+# ============================================================================
+# CWT (CONTINUOUS WAVELET TRANSFORM) PARAMETERS
+# ============================================================================
+# Frequency grid: log-spaced gives finer resolution where the
+# physiology lives (LF and HF bands)
+CWT_FREQ_MIN = 0.01
+CWT_FREQ_MAX = 0.50
+CWT_N_FREQS  = 100
+
+# Adaptive Morlet n_cycles ramp:
+#   - high n_cycles at low freq -> long wavelet -> fine freq resolution
+#   - low  n_cycles at high freq -> short wavelet -> fine time resolution
+CWT_N_CYCLES_LOW  = 5
+CWT_N_CYCLES_HIGH = 15
+
+
+
 # Pathways
 ############################################################################
 
