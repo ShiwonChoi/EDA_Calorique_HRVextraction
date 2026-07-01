@@ -142,7 +142,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                         print(f"  {key}: {value}")
             
 
-            # ── 6. Global HRV metrics ───────────────────────────────
+            # -- 6. Global & Interval HRV metrics ---------------------------------------------------------------------------------
             condition   = df_ppg_t['condition'].iloc[0]
             rel_time    = float(results['beat_times_clean'][0]) * 1000
             abs_time    = rel_time  # single trial: abs == rel
@@ -151,11 +151,12 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
             ev_times_s  = df_events_t['time_since_connected_ms'].values / 1000
             task_window = (float(ev_times_s[0]), float(ev_times_s[-1]))
 
-            # ── 6a. Temporal ─────────────────────────────────────────
+            # -- 6a. Temporal -------------------------------------------------------------------------------------------
             metrics_temp = get_temp_metrics(results['intervals_clean'])
             if condition == 'baseline':
                 baseline_temp_raw = metrics_temp
 
+            # TODO : make the result rows uniform, add column to differentiate global and interval rows
             for metric_name, metric_value in metrics_temp.items():
                 bl = baseline_temp_raw[metric_name] #if (condition != 'baseline' and baseline_temp_raw) else float('nan')
                 CAL_temp.extend(build_result_row(
