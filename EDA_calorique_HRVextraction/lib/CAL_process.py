@@ -12,6 +12,7 @@ from lib.Metric_extraction.HRV_freq_extract import (
 )
 from lib.Metric_extraction.HRV_freq_bin import bin_totalbandpower, bin_bandpower_30s
 from lib.Metric_extraction.HRV_df import build_result_row
+from lib.config import OUTPUT_COLUMNS
 
 def full_process_single(participant_path, use_physio=True, use_stat=False, show=False, bin=30):
     """
@@ -39,9 +40,9 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         stim rows are corrected per-frequency against Trial00.
 
     Returns:
-        participant_id (str)      : Participant identifier (e.g. "SC_01").
-        CAL_temp       (list[dict]): Temporal HRV rows (long-format).
-        CAL_freq       (list[dict]): Frequency HRV rows (long-format).
+        participant_id (str)         : Participant identifier (e.g. "SC_01").
+        df_temp        (pd.DataFrame): Temporal HRV rows, schema = OUTPUT_COLUMNS.
+        df_freq        (pd.DataFrame): Frequency HRV rows, schema = OUTPUT_COLUMNS.
     """
     participant_path = Path(participant_path)
 
@@ -119,7 +120,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
             # Visualize each preprocessing step
             print("\nCreating tachogram from raw RRI to filtered RRI")
             plot_preprocessing_steps(results, participant_id=participant_id,
-                                      df_events=df_events_t, trial=trial, show=True)
+                                      df_events=df_events_t, trial=trial, show=show)
 
             print("\nPreprocessing complete.")
             print(f"  Input:  {len(results['intervals_raw'])} beats (irregular)")
@@ -247,7 +248,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                     participant_id=participant_id,
                     event_times=ev_times_s.tolist(),
                     event_labels=ev_labels,
-                    show=True,
+                    show=show,
                 )
 
             print("  Freq total: " + "  ".join(
@@ -255,22 +256,22 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                 for r in total.to_dict('records')
             ))
 
-            # ── 7. Interval HRV metrics ──────────────────────────────
-            # TODO : Extract per-interval HRV metrics
-
-
-        # TODO : combine the abs zero ref timeline between trials to create a continuous data
+        # Output dataframes for HRV temp and freq metrics
+        df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
 
         print(f"\n{'=' * 55}")
         print(f"  All trials processed for {participant_id}.")
-        print(f"  CAL_temp rows : {len(CAL_temp)}")
-        print(f"  CAL_freq rows : {len(CAL_freq)}")
+        print(f"  CAL_temp rows : {len(df_temp)}")
+        print(f"  CAL_freq rows : {len(df_freq)}")
         print(f"{'=' * 55}")
 
-        return participant_id, CAL_temp, CAL_freq
+        return participant_id, df_temp, df_freq
 
     except Exception as e:
         import traceback
         print(f"\nERROR processing {participant_path.name}: {e}")
         traceback.print_exc()
-        return participant_id, CAL_temp, CAL_freq
+        df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        return participant_id, df_temp, df_freq

@@ -510,6 +510,6 @@ def plot_preprocessing_steps(results, participant_id=None, df_events=None, trial
 
     if show:
         plt.show()
-    #plt.close(fig)
+        plt.close(fig)
 
     return fig
