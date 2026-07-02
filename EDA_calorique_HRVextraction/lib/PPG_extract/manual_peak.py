@@ -81,10 +81,13 @@ def load_corrected_rri(csv_path, use_physio=False, use_stat=False):
         df = pd.read_csv(Path(csv_path))
     except Exception as e:
         print(f"    Error reading corrected RRI file: {e}")
-        return None
+        return None, 0
 
     df.columns = df.columns.str.strip()
     col_map = {c.lower(): c for c in df.columns}
+
+    # Total intervals in the file before any filtering
+    base_rri = len(df)
 
     # ── Classification filter (always applied) ────────────────────────────────
     class1_col = _find_col(col_map, "peak1_classification")
@@ -126,7 +129,7 @@ def load_corrected_rri(csv_path, use_physio=False, use_stat=False):
         else:
             print(f"    WARNING: use_stat=True but no statistically_valid column found")
 
-    return df
+    return df, base_rri
 
 
 def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
@@ -141,6 +144,8 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
         signal         (pd.DataFrame) : NK2 signal with PPG_Peaks and PPG_Peaks_Corr.
         info           (dict)         : NK2 info dict.
         epoch_bounds   (dict)         : {trial: {"rel_lo","rel_hi","abs_lo","abs_hi"}} in ms.
+        base_rri       (int | None)   : Total RRI rows in the corrected CSV before any filtering;
+                                        None if no corrected CSV was loaded.
     """
     participant_id = df_ppg["participant"].iloc[0] if "participant" in df_ppg.columns else "unknown"
     trial     = df_ppg["trial"].iloc[0]
@@ -169,9 +174,10 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
 
     # Load corrected RRI, filter to event window, place peaks
     corr_by_trial = {}
+    base_rri = None
     if corr_paths and trial in corr_paths:
         print(f"  Loading corrected RRI — {trial}...")
-        df_corr = load_corrected_rri(corr_paths[trial], use_physio=use_physio, use_stat=use_stat)
+        df_corr, base_rri = load_corrected_rri(corr_paths[trial], use_physio=use_physio, use_stat=use_stat)
         if df_corr is not None:
             col_map = {c.lower(): c for c in df_corr.columns}
             t1_col  = _find_col(col_map, "peak1_time_s")
@@ -218,7 +224,7 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
           f"{len(rri_auto_ms)} RRI intervals")
     print(f"  Corrected peaks in signal: {int(signal['PPG_Peaks_Corr'].sum())}")
 
-    return rri_auto_ms, rri_auto_trial, corr_by_trial, signal, info, epoch_bounds
+    return rri_auto_ms, rri_auto_trial, corr_by_trial, signal, info, epoch_bounds, base_rri
 
 
 def plot_corr_peaks(signal, df_ppg, df_events, corr_by_trial, participant, show=True):

@@ -114,3 +114,22 @@ output_file = output_dir / "processed_ppg_results.csv"
 def get_participant_paths(root=PARTICIPANTS_DIR, pattern="SC_*"):
     """Return sorted list of SC_## participant folders found under root."""
     return sorted(root.glob(pattern))
+
+
+# ============================================================================
+# UNIFIED OUTPUT SCHEMA — shared by CAL_temp and CAL_freq (total + interval)
+# ============================================================================
+OUTPUT_COLUMNS = [
+    'participant', 'trial', 'condition',
+    'time_interval_rel_start', 'time_interval_abs_start',
+    'time_interval_rel_end',   'time_interval_abs_end',
+    'task_moment', 'recording_type',
+    'Metric', 'Value_type', 'Value',
+    'sample_size', 'status', 'error',
+]
+
+# Shared across temporal and frequency HRV metrics.
+# Baseline rows carry raw values; diff/pct_change/log_ratio are set to 0.0
+#temporal: by _derive_baseline_corrected; frequency: filled in binning functions
+# since per-frequency correction is not run against a trial's own data).
+VALUE_TYPES = ['raw', 'diff', 'pct_change', 'log_ratio']

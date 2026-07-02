@@ -1,4 +1,3 @@
-import datetime as datetime
 import math
 
 
@@ -12,7 +11,7 @@ def bin_segments(signal, start, end, rel_start, rel_end, interval=30):
     while rel <= rel_end:
         next_t = min(t + interval, end)
         next_rel = rel + interval
-        
+
         # Extract segment for this bin
         # Use < for upper bound to avoid overlap, except for the very last bin
         if next_rel < rel_end:
@@ -27,10 +26,10 @@ def bin_segments(signal, start, end, rel_start, rel_end, interval=30):
                 (signal["time_seconds"] >= t) &
                 (signal["time_seconds"] <= next_t)
             ].copy()
-        
+
         if len(seg) > 0:
             rows.append((rel, seg))
-        
+
         t = next_t
         rel = next_rel
 
@@ -40,7 +39,7 @@ def bin_segments(signal, start, end, rel_start, rel_end, interval=30):
 def _derive_baseline_corrected(metric_value, baseline_mean, condition):
     """
     Compute diff / pct_change / log_ratio vs baseline.
-    Baseline rows get 0.0 by convention (not NaN).
+    Baseline rows get 0.0 by convention.
     """
     is_baseline = condition in ("baseline", "Trial00")
 
@@ -62,21 +61,35 @@ def _derive_baseline_corrected(metric_value, baseline_mean, condition):
 
 
 def build_result_row(
-        participant_id, trial, condition, rel_time, abs_time, metric_name, metric_value,
-        baseline_mean,
-        status="SUCCESS", error=None):
-    
+        participant_id, trial, condition,
+        time_interval_rel_start, time_interval_abs_start,
+        time_interval_rel_end,   time_interval_abs_end,
+        task_moment, recording_type,
+        metric_name, metric_value, baseline_mean,
+        sample_size=None, status="SUCCESS", error=None):
+    """
+    Build 4 long-format rows (raw / diff / pct_change / log_ratio) for one
+    metric value, using the unified OUTPUT_COLUMNS schema from config.py.
+
+    All times must be in seconds.
+    Baseline rows get 0.0 for diff / pct_change / log_ratio.
+    """
     derived = _derive_baseline_corrected(metric_value, baseline_mean, condition)
 
     base = {
-        "participant":            participant_id,
-        "trial":                  trial,
-        "condition":              condition,
-        "rel_time (ms)":          rel_time, 
-        "abs_time (ms)":          abs_time, 
-        "Metric":                 metric_name,
-        "status":                 status,
-        "error":                  error,
+        "participant":              participant_id,
+        "trial":                    trial,
+        "condition":                condition,
+        "time_interval_rel_start":  time_interval_rel_start,
+        "time_interval_abs_start":  time_interval_abs_start,
+        "time_interval_rel_end":    time_interval_rel_end,
+        "time_interval_abs_end":    time_interval_abs_end,
+        "task_moment":              task_moment,
+        "recording_type":           recording_type,
+        "Metric":                   metric_name,
+        "sample_size":              sample_size,
+        "status":                   status,
+        "error":                    error,
     }
 
     value_map = {
@@ -90,4 +103,3 @@ def build_result_row(
         {**base, "Value_type": vt, "Value": val}
         for vt, val in value_map.items()
     ]
-

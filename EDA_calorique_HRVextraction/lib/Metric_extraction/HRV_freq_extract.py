@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-from lib.TBP_config import HRV_BANDS
+from lib.config import HRV_BANDS
 
 
 # numpy >=2.0 renamed np.trapz -> np.trapezoid
