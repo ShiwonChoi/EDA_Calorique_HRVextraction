@@ -46,13 +46,17 @@ def get_temp_metrics(rri_ms, beat_times=None, t_start=None, t_end=None):
 # ==========================================================================
 # RECORDING-PHASE BOUNDARIES (shared by HRV_freq_bin and HRV_temp_bin)
 # ==========================================================================
-# Event markers (lib.config.ALLSTIMCOND) that delineate each phase within a
-# stim trial's own recording. Baseline trials (condition == 'baseline') have
-# no anticipation/task/recovery split — only baseline_start/baseline_end.
+# Event markers (lib.config.ALLCOND) that delineate each phase within a
+# block trial's own recording. Baseline trials have no anticipation/task/
+# recovery split — only their own start/end markers. 'recovery' has two
+# candidate marker pairs: rest_start/rest_end for blocks 1-5, falling back to
+# post_recovery_start/post_recovery_end for block 6, which has no rest of its
+# own (assign_trial_condition extends block 6's window through post_recovery
+# for exactly this reason).
 PHASE_EVENTS = {
-    'anticipation': ('pre_stimulation_baseline_start', 'pre_stimulation_baseline_end'),
-    'task':         ('stimulation_start', 'stimulation_end'),
-    'recovery':     ('recovery_start', 'recovery_end'),
+    'anticipation': [('block_start', 'countdown_start')],
+    'task':         [('sound_play_start', 'sound_play_end')],
+    'recovery':     [('rest_start', 'rest_end'), ('post_recovery_start', 'post_recovery_end')],
 }
 
 
@@ -60,16 +64,20 @@ def phase_windows(df_events_t):
     """
     Map this trial's event_type rows to (start, end) seconds for the
     anticipation / task / recovery phases. Missing markers (e.g. baseline
-    trials) yield None for that phase.
+    trials) yield None for that phase. Aggregates by min/max rather than a
+    unique index lookup since a quatre_sons block has up to 12
+    sound_play_start/end rows — the task window spans the first
+    sound_play_start to the last sound_play_end.
     """
-    ev = df_events_t.set_index('event_type')['time_since_connected_ms'] / 1000
+    ev = df_events_t.groupby('event_type')['time_since_connected_ms'].agg(['min', 'max']) / 1000
 
     windows = {}
-    for phase_name, (start_label, end_label) in PHASE_EVENTS.items():
-        if start_label in ev.index and end_label in ev.index:
-            windows[phase_name] = (float(ev[start_label]), float(ev[end_label]))
-        else:
-            windows[phase_name] = None
+    for phase_name, candidates in PHASE_EVENTS.items():
+        windows[phase_name] = None
+        for start_label, end_label in candidates:
+            if start_label in ev.index and end_label in ev.index:
+                windows[phase_name] = (float(ev.loc[start_label, 'min']), float(ev.loc[end_label, 'max']))
+                break
     return windows
 
 

@@ -2,107 +2,58 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from lib.PPG_extract.ppg_preprocess import match_events, clean_events
+from lib.PPG_extract.ppg_preprocess import clean_events, assign_trial_condition
 
-def load_ppg(participant_path, trial_filter=None, show=True):
+def load_ppg(participant_path, show=True):
     """
-    Load shimmer PPG and events CSVs for a single participant.
+    Load the shimmer PPG and event-log CSVs for a single participant's session.
 
-    Scans the 'Stress measures' subfolder of participant_path for all
-    shimmer_*.csv and events_*.csv files (Trial00/baseline, Trial01/condition,
-    Trial02/condition), pairs them by shared filename suffix, and returns
-    concatenated DataFrames across all three trials.
+    Expects a flat layout directly under participant_path: exactly one
+    shimmer_*.csv and one event_log_*_aligned.csv, covering the whole
+    continuous recording (baseline + all blocks + post-recovery in one file).
 
     Args:
         participant_path: Path to the SC_## participant folder.
-        show: If True, print a loading summary per trial.
+        show: If True, print a loading summary.
 
     Returns:
-        df_ppg          : Combined shimmer DataFrame (all trials, with added
-                          'participant', 'trial', 'condition' columns).
-        df_events       : Combined events DataFrame (matching structure).
+        df_ppg         : Shimmer DataFrame for the whole session.
+        df_events      : Event-log DataFrame with 'trial'/'condition' columns
+                          derived by assign_trial_condition.
+        participant_id : Folder name (e.g. "SC_18").
     """
     participant_path = Path(participant_path)
-    stress_dir = participant_path / "Stress measures"
+    participant_id = participant_path.name
 
-    if not stress_dir.exists():
-        raise FileNotFoundError(
-            f"No 'Stress measures' folder found in {participant_path}"
+    shimmer_files = sorted(participant_path.glob("shimmer_*.csv"))
+    if len(shimmer_files) != 1:
+        raise ValueError(
+            f"Expected exactly one shimmer_*.csv in {participant_path}, found {len(shimmer_files)}"
+        )
+    event_files = sorted(participant_path.glob("event_log_*_aligned.csv"))
+    if len(event_files) != 1:
+        raise ValueError(
+            f"Expected exactly one event_log_*_aligned.csv in {participant_path}, found {len(event_files)}"
         )
 
-    if trial_filter is not None and isinstance(trial_filter, str):
-        trial_filter = {trial_filter}
-    elif trial_filter is not None:
-        trial_filter = set(trial_filter)
+    # Shimmer CSV: row 0 = column names, rows 1-2 = unit labels (skip)
+    df_ppg = pd.read_csv(shimmer_files[0], header=0, skiprows=[1, 2])
+    df_ppg["participant"] = participant_id
 
-    shimmer_files = sorted(stress_dir.glob("shimmer_*.csv"))
-    if not shimmer_files:
-        raise ValueError(f"No shimmer CSV files found in {stress_dir}")
+    df_events = pd.read_csv(event_files[0])
+    df_events = df_events.rename(columns={
+        "event_label":      "event_type",
+        "shimmer_device_ms": "time_since_connected_ms",
+        "trial":            "raw_block_index",
+        "block":            "raw_block_label",
+    })
+    df_events["participant"] = participant_id
+    df_events = assign_trial_condition(df_events)
 
-    # Build lookup: shared key → events file
-    events_lookup = {
-        ef.stem[len("events_"):]: ef
-        for ef in stress_dir.glob("events_*.csv")
-    }
-
-    shimmer_dfs = []
-    events_dfs = []
-
-    for shimmer_file in shimmer_files:
-        key = shimmer_file.stem[len("shimmer_"):]
-
-        # Parse participant, trial, condition, timestamp from key parts
-        # Format: P00#_Trial0#_<condition>_YYYYMMDD_HHMMSS
-        parts = key.split("_")
-        if len(parts) < 5:
-            print(f"  Warning: unexpected shimmer filename format, skipping: {shimmer_file.name}")
-            continue
-
-        participant_id = parts[0]                     # e.g. "P003"
-        trial         = parts[1]                     # e.g. "Trial01"
-        condition     = "_".join(parts[2:-2])        # e.g. "baseline", "LW", "RW"
-
-        if trial_filter is not None and trial not in trial_filter:
-            continue
-
-        # Shimmer CSV: row 0 = column names, rows 1-2 = unit labels (skip)
-        df_shimmer = pd.read_csv(shimmer_file, header=0, skiprows=[1, 2])
-        df_shimmer["participant"] = participant_id
-        df_shimmer["trial"]      = trial
-        df_shimmer["condition"]  = condition
-        shimmer_dfs.append(df_shimmer)
-
-        # Events CSV: row 0 is a comment line ("# First sample at: ...")
-        if key in events_lookup:
-            df_ev = pd.read_csv(events_lookup[key], comment="#")
-            df_ev["participant"] = participant_id
-            df_ev["trial"]      = trial
-            df_ev["condition"]  = condition
-            events_dfs.append(df_ev)
-        else:
-            print(f"  Warning: no matching events file for {shimmer_file.name}")
-
-        if show:
-            print(
-                f"  Loaded {participant_id} | {trial} | {condition} "
-                f"| shimmer rows: {len(df_shimmer)}"
-            )
-
-    df_ppg    = pd.concat(shimmer_dfs, ignore_index=True)
-    df_events = pd.concat(events_dfs,  ignore_index=True) if events_dfs else pd.DataFrame()
-
-    # Cross-check JSON vs CSV event files; raise on any mismatch
-    event_check = match_events(participant_path)
-    failed = [r for r in event_check if r["status"] != "OK"]
-    if failed:
-        lines = []
-        for r in failed:
-            tag = f"{r['participant']} | {r['trial']} | {r['condition']}"
-            lines.append(f"  [{r['status']}] {tag}")
-            for msg in r["mismatches"]:
-                lines.append(f"    {msg}")
-        raise ValueError(
-            "Event file mismatch detected — aborting load:\n" + "\n".join(lines)
+    if show:
+        print(
+            f"  Loaded {participant_id} | shimmer rows: {len(df_ppg)} "
+            f"| event rows: {len(df_events)}"
         )
 
     return df_ppg, df_events, participant_id
@@ -201,16 +152,43 @@ def check_signals_ppg(df, badsegments, event_dict):
     plt.xlabel('time_seconds')
 
 
-def load_and_clean_ppg(participants_path, trial_filter=None, show=False):
+def tag_ppg_trial_condition(df_ppg, df_events, participant_id):
+    """
+    Stamp 'participant'/'trial'/'condition' onto each df_ppg row by matching
+    its 'rel_zero_ref (ms)' timestamp against the [min, max] time_since_connected_ms
+    window of each trial in df_events (same clock origin — shimmer-connect zero).
+
+    Rows outside every trial's window (e.g. shimmer kept recording after
+    experiment_end) are left untagged (NaN) and are naturally excluded once
+    downstream code slices df_ppg by trial.
+    """
+    df_ppg = df_ppg.copy()
+    df_ppg["participant"] = participant_id
+    df_ppg["trial"]       = pd.NA
+    df_ppg["condition"]   = pd.NA
+
+    bounds = df_events.dropna(subset=["trial"]).groupby("trial").agg(
+        lo=("time_since_connected_ms", "min"),
+        hi=("time_since_connected_ms", "max"),
+        condition=("condition", "first"),
+    )
+
+    rel_ms = df_ppg["rel_zero_ref (ms)"]
+    for trial, row in bounds.iterrows():
+        mask = (rel_ms >= row["lo"]) & (rel_ms <= row["hi"])
+        df_ppg.loc[mask, "trial"]     = trial
+        df_ppg.loc[mask, "condition"] = row["condition"]
+
+    return df_ppg
+
+
+def load_and_clean_ppg(participants_path, show=False):
     """
     Args:
         participants_path : Path to the SC_## participant folder.
-        trial_filter      : Optional str or list of str.  When given, only the named
-                            trial(s) are loaded and processed.  Pass a single trial
-                            name (e.g. "Trial01") or a list.  None → all trials.
-        show              : If True, display raw signal quality plot after loading.
+        show               : If True, display raw signal quality plot after loading.
     """
-    df_ppg_raw, df_events, participant_id = load_ppg(participants_path, trial_filter=trial_filter)
+    df_ppg_raw, df_events, participant_id = load_ppg(participants_path, show=show)
     df_events = clean_events(df_events)
 
     df_ppg = df_ppg_raw.copy()
@@ -223,12 +201,13 @@ def load_and_clean_ppg(participants_path, trial_filter=None, show=False):
     df_ppg.index            = pd.to_timedelta(rel, unit='ms')
     df_ppg["time_seconds"]  = df_ppg["rel_zero_ref (ms)"] / 1000
 
+    df_ppg = tag_ppg_trial_condition(df_ppg, df_events, participant_id)
+
     # Remove duplicate recording
     dup_mask = df_ppg.index.duplicated(keep='first')
     n_dup    = int(dup_mask.sum())
     if n_dup:
-        trial_label = df_ppg["trial"].iloc[0]
-        print(f"  {trial_label}: {n_dup} duplicate timestamps removed")
+        print(f"  {participant_id}: {n_dup} duplicate timestamps removed")
         df_ppg = df_ppg[~dup_mask]
 
     # Bad segments & resampling

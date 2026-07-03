@@ -18,8 +18,17 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
     """
     Process one participant's PPG data on a per-trial basis.
 
-    For each trial (Trial00, Trial01, Trial02) the pipeline runs independently:
-        load_and_clean_ppg  → load_corrected_peaks → process_rri_intervals → plot_corr_peaks
+    The whole session (baseline + 6 stimulus blocks) is one continuous
+    recording, loaded once via load_and_clean_ppg. Trials are then the 7
+    windows derived by assign_trial_condition:
+        0        'baseline'
+        1..6     '<sound>_<design>' e.g. 'loud_individu', 'quiet_quatre_sons'
+    Block 6 has no rest_start/rest_end of its own, so its window (and
+    'recovery' phase) extends through post_recovery_start/post_recovery_end
+    instead — see phase_windows in HRV_temp_extract.py.
+    For each trial the pipeline runs independently on its slice of the
+    combined frames:
+        load_corrected_peaks → process_rri_intervals → plot_corr_peaks
         → RRI preprocessing → global HRV metric extraction
 
     Both CAL_temp and CAL_freq use the unified OUTPUT_COLUMNS schema (config.py):
@@ -30,14 +39,14 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         sample_size ("<n_clean> of <n_raw>"), status, error
 
     CAL_temp collects temporal HRV rows (mean_HR, mean_RRI, RMSSD, SDNN):
-        - 'total' rows: whole-trial metric, baseline-referenced against Trial00.
-        - 'interval' rows (stim trials only): 30-s bins, same baseline reference.
+        - 'total' rows: whole-trial metric, baseline-referenced against trial 0.
+        - 'interval' rows (block trials only): 30-s bins, same baseline reference.
 
     CAL_freq collects frequency HRV rows (VLF, LF, HF band power):
         - 'total' rows: whole-trial mean per band, all trials.
-        - 'interval' rows (stim trials only): 30-s bin means.
+        - 'interval' rows (block trials only): 30-s bin means.
         Baseline rows carry diff/pct_change/log_ratio = 0.0 by convention;
-        stim rows are corrected per-frequency against Trial00.
+        other rows are corrected per-frequency against trial 0.
 
     Returns:
         participant_id (str)         : Participant identifier (e.g. "SC_01").
@@ -45,16 +54,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         df_freq        (pd.DataFrame): Frequency HRV rows, schema = OUTPUT_COLUMNS.
     """
     participant_path = Path(participant_path)
-
-    # Discover available trials by listing shimmer files
-    stress_dir = participant_path / "Stress measures"
-    # stem = "shimmer_P002_Trial00_baseline_YYYYMMDD_HHMMSS" → split index 2 = trial
-    trials = sorted({
-        f.stem.split("_")[2]
-        for f in stress_dir.glob("shimmer_*.csv")
-    })
     print(f"\nParticipant folder : {participant_path.name}")
-    print(f"Trials found       : {trials}")
 
     CAL_temp              = []
     CAL_freq              = []
@@ -63,16 +63,20 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
     participant_id        = None
 
     try:
+        # Load the whole continuous session once; slice per trial below.
+        df_ppg, df_events, fs, _, participant_id = load_and_clean_ppg(participant_path, show=show)
+        trials = sorted(df_events['trial'].dropna().unique())
+        print(f"Trials found       : {trials}")
+
         for trial in trials:
             print(f"\n{'─' * 55}")
             print(f"  Trial: {trial}")
             print(f"{'─' * 55}")
 
 
-            # ── 1. Load and preprocess (this trial only) ──────────────────
-            df_ppg_t, df_events_t, fs, _, participant_id = load_and_clean_ppg(
-                participant_path, trial_filter=trial, show=show
-            )
+            # ── 1. Slice this trial's rows out of the combined session ─────
+            df_ppg_t    = df_ppg[df_ppg['trial'] == trial].reset_index(drop=True)
+            df_events_t = df_events[df_events['trial'] == trial].reset_index(drop=True)
 
 
             # ── 2. NK2 peak detection + event-window RRI ───────────────────
@@ -184,7 +188,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                 ))
             print(f"\n  Temporal: {metrics_temp}")
 
-            # 30-s binned temporal metrics — stim trials only (baseline kept whole)
+            # 30-s binned temporal metrics — block trials only (baseline kept whole)
             if condition != 'baseline':
                 temp_binned = bin_temp_30s(
                     results['intervals_clean'], results['beat_times_clean'],
@@ -199,7 +203,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                                     results['fs_resample'], verbose=False)
 
             if condition == 'baseline':
-                # Trial00 IS the baseline — raw band power only, no
+                # Trial 0 IS the baseline — raw band power only, no
                 # per-frequency correction to run against itself. Its own
                 # per-frequency mean (over its whole window) becomes the
                 # reference other trials are corrected against below.
@@ -212,9 +216,9 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                 bl_mask = (cwt_r['times'] >= task_window[0]) & (cwt_r['times'] < task_window[1])
                 baseline_per_freq_raw = np.nanmean(cwt_r['power'][:, bl_mask], axis=1)
             else:
-                # Per-frequency correction against Trial00's baseline_per_freq_raw,
+                # Per-frequency correction against trial 0's baseline_per_freq_raw,
                 # not a time-masked window of this trial's own CWT matrix
-                # (Trial00 and this trial have independent CWT time axes).
+                # (trial 0 and this trial have independent CWT time axes).
                 task_out = run_cwt_task(
                     cwt_r, task=trial, participant_id=participant_id,
                     task_window=task_window,

@@ -1,180 +1,97 @@
-import json
 import pandas as pd
-from pathlib import Path
 from lib.config import *
-
-
-def match_events(participant_path):
-    """
-    Cross-check the events JSON and CSV files for every trial of a participant.
-
-    For each matched pair (same P00#_Trial0#_condition_timestamp key) inside
-    'Stress measures/', the function compares:
-
-      1. First-sample anchor  — CSV comment "# First sample at: ..." vs
-                                 JSON synchronization.first_sample_utc
-      2. Event count          — number of rows in CSV vs entries in JSON events list
-      3. Event-type sequence  — ordered list of event_type values
-      4. Timestamps           — timestamp_utc per event (exact string comparison)
-
-    Args:
-        participant_path: Path to the SC_## participant folder.
-
-    Returns:
-        List of dicts, one per trial, with keys:
-            participant      (str)
-            trial            (str)
-            condition        (str)
-            status           ('OK' | 'MISMATCH' | 'MISSING_CSV' | 'MISSING_JSON')
-            csv_count        (int | None)
-            json_count       (int | None)
-            mismatches       (list[str])  — empty when status == 'OK'
-    """
-    participant_path = Path(participant_path)
-    stress_dir = participant_path / "Stress measures"
-
-    if not stress_dir.exists():
-        raise FileNotFoundError(
-            f"No 'Stress measures' folder found in {participant_path}"
-        )
-
-    # Build lookup dicts: shared key → file path
-    csv_lookup  = {
-        f.stem[len("events_"):]: f
-        for f in stress_dir.glob("events_*.csv")
-    }
-    json_lookup = {
-        f.stem[len("events_"):]: f
-        for f in stress_dir.glob("events_*.json")
-    }
-
-    all_keys = sorted(set(csv_lookup) | set(json_lookup))
-    results  = []
-
-    for key in all_keys:
-        parts         = key.split("_")
-        participant_id = parts[0]
-        trial          = parts[1]
-        condition      = "_".join(parts[2:-2])
-
-        base = {"participant": participant_id, "trial": trial, "condition": condition}
-
-        # ── Missing-pair guard ───────────────────────────────────────────────
-        if key not in csv_lookup:
-            results.append({**base, "status": "MISSING_CSV",
-                            "csv_count": None, "json_count": None,
-                            "mismatches": [f"No CSV found for key: {key}"]})
-            continue
-
-        if key not in json_lookup:
-            results.append({**base, "status": "MISSING_JSON",
-                            "csv_count": None, "json_count": None,
-                            "mismatches": [f"No JSON found for key: {key}"]})
-            continue
-
-        mismatches = []
-
-        # ── Load CSV ─────────────────────────────────────────────────────────
-        df_csv = pd.read_csv(csv_lookup[key], comment="#")
-
-        # Extract the first-sample timestamp from the comment line
-        csv_first_sample = None
-        with open(csv_lookup[key]) as fh:
-            first_line = fh.readline().strip()
-            if first_line.startswith("# First sample at:"):
-                csv_first_sample = first_line.split("# First sample at:")[-1].strip()
-
-        # ── Load JSON ────────────────────────────────────────────────────────
-        with open(json_lookup[key]) as fh:
-            jdata = json.load(fh)
-
-        json_events      = jdata.get("events", [])
-        json_first_sample = jdata.get("synchronization", {}).get("first_sample_utc")
-
-        csv_count  = len(df_csv)
-        json_count = len(json_events)
-
-        # ── Check 1: first-sample anchor ─────────────────────────────────────
-        if csv_first_sample != json_first_sample:
-            mismatches.append(
-                f"first_sample mismatch — CSV: '{csv_first_sample}' | "
-                f"JSON: '{json_first_sample}'"
-            )
-
-        # ── Check 2: event count ─────────────────────────────────────────────
-        if csv_count != json_count:
-            mismatches.append(
-                f"event count mismatch — CSV: {csv_count} | JSON: {json_count}"
-            )
-
-        # ── Check 3 & 4: event-type sequence and timestamps ──────────────────
-        csv_types  = df_csv["event_type"].tolist()
-        json_types = [ev["event_type"] for ev in json_events]
-
-        if csv_types != json_types:
-            # Report only the diverging positions to keep output compact
-            diffs = [
-                f"  row {i}: CSV='{c}' vs JSON='{j}'"
-                for i, (c, j) in enumerate(
-                    zip(csv_types, json_types), start=1
-                )
-                if c != j
-            ]
-            extras_csv  = csv_types[len(json_types):]
-            extras_json = json_types[len(csv_types):]
-            detail = "\n".join(diffs)
-            if extras_csv:
-                detail += f"\n  CSV has extra events: {extras_csv}"
-            if extras_json:
-                detail += f"\n  JSON has extra events: {extras_json}"
-            mismatches.append(f"event_type sequence mismatch:\n{detail}")
-
-        else:
-            # Types match — check per-event timestamps
-            ts_mismatches = []
-            for i, (row, ev) in enumerate(
-                zip(df_csv.itertuples(index=False), json_events), start=1
-            ):
-                csv_ts  = str(row.timestamp_utc).strip()
-                json_ts = str(ev.get("timestamp_utc", "")).strip()
-                if csv_ts != json_ts:
-                    ts_mismatches.append(
-                        f"  row {i} ({ev['event_type']}): "
-                        f"CSV='{csv_ts}' | JSON='{json_ts}'"
-                    )
-            if ts_mismatches:
-                mismatches.append(
-                    "timestamp_utc mismatch:\n" + "\n".join(ts_mismatches)
-                )
-
-        status = "OK" if not mismatches else "MISMATCH"
-        results.append({
-            **base,
-            "status":     status,
-            "csv_count":  csv_count,
-            "json_count": json_count,
-            "mismatches": mismatches,
-        })
-
-    return results
 
 
 def clean_events(df_events):
     """
-    Retain only the event rows needed for analysis.
-
-    Baseline trials  (condition == 'baseline') : keeps event_types listed in ALLBASECOND.
-    Condition trials (RW, LW, RC, LC)          : keeps event_types listed in ALLSTIMCOND.
+    Retain only the event rows needed for analysis: event_types listed in ALLCOND.
     """
-    STIM_CONDITIONS = {'RW', 'LW', 'RC', 'LC'}
-    baseline_types  = {t[0] for t in ALLBASECOND}
-    stim_types      = {t[0] for t in ALLSTIMCOND}
+    allowed_types = {t[0] for t in ALLCOND}
+    return df_events[df_events['event_type'].isin(allowed_types)].reset_index(drop=True)
 
-    mask = (
-        ((df_events['condition'] == 'baseline') & (df_events['event_type'].isin(baseline_types))) |
-        (df_events['condition'].isin(STIM_CONDITIONS) & df_events['event_type'].isin(stim_types))
-    )
-    return df_events[mask].reset_index(drop=True)
+
+def assign_trial_condition(df_events):
+    """
+    Stamp `trial` / `condition` columns onto a single-session event log by
+    locating each anchor event's row position (rows are already ordered by
+    event_number). One continuous recording covers baseline and 6 stimulus
+    blocks:
+
+        trial=0        condition='baseline'       baseline_start .. baseline_end
+        trial=1..6     condition=<block label>     block_start .. rest_end
+                                                     (or .. post_recovery_end
+                                                     for block 6, which has no
+                                                     rest_start/rest_end of its
+                                                     own — post_recovery IS its
+                                                     recovery phase)
+
+    Rows outside all of the above windows are left with trial/condition = NaN;
+    `clean_events` only keeps ALLCOND event types, all of which fall inside
+    one of these windows, so no valid row is ever left untagged.
+    """
+    df = df_events.sort_values('event_number').reset_index(drop=True)
+    trial     = pd.Series(pd.NA, index=df.index, dtype='object')
+    condition = pd.Series(pd.NA, index=df.index, dtype='object')
+
+    def mark(lo_idx, hi_idx, trial_val, cond_val):
+        span = (df.index >= lo_idx) & (df.index <= hi_idx)
+        trial.loc[span]     = trial_val
+        condition.loc[span] = cond_val
+
+    # ── Baseline ────────────────────────────────────────────────────────────
+    b_start = df.index[df['event_type'] == 'baseline_start']
+    b_end   = df.index[df['event_type'] == 'baseline_end']
+    if len(b_start) and len(b_end):
+        mark(b_start[0], b_end[0], 0, 'baseline')
+
+    # ── Blocks ──────────────────────────────────────────────────────────────
+    # block_start's own row is the sole source of truth for this block's
+    # number/label/design — the countdown_start/sound_play_* rows in between
+    # reuse the 'trial'/'block' raw columns for unrelated internal indices
+    # (e.g. sub-numbering the 12 sounds, or a per-design occurrence counter),
+    # which must NOT be mistaken for the session-wide block number.
+    for _, row in df[df['event_type'] == 'block_start'].iterrows():
+        start_idx  = row.name
+        block_num  = int(row['raw_block_index'])
+        # Condition = sound label + block design, e.g. 'loud_individu' vs
+        # 'loud_quatre_sons' — same sound label, different stimulus design,
+        # so they must not collapse into one condition.
+        block_cond = f"{row['raw_block_label']}_{row['detail']}"
+
+        block_end_idx = df.index[
+            (df['event_type'] == 'block_end') & (df.index > start_idx)
+        ]
+        if not len(block_end_idx):
+            continue
+        stop_idx = block_end_idx[0]
+
+        # Recovery-equivalent window right after this block: rest_start/end
+        # for blocks 1-5, falling back to post_recovery_start/end for block 6
+        # (which has no rest of its own — post_recovery plays that role).
+        next_block_idx = df.index[
+            (df['event_type'] == 'block_start') & (df.index > stop_idx)
+        ]
+        rest_end_idx = df.index[
+            (df['event_type'] == 'rest_end') & (df.index > stop_idx)
+        ]
+        if len(rest_end_idx) and (
+            not len(next_block_idx) or rest_end_idx[0] < next_block_idx[0]
+        ):
+            stop_idx = rest_end_idx[0]
+        else:
+            pr_end_idx = df.index[
+                (df['event_type'] == 'post_recovery_end') & (df.index > stop_idx)
+            ]
+            if len(pr_end_idx) and (
+                not len(next_block_idx) or pr_end_idx[0] < next_block_idx[0]
+            ):
+                stop_idx = pr_end_idx[0]
+
+        mark(start_idx, stop_idx, block_num, block_cond)
+
+    df['trial']     = trial
+    df['condition'] = condition
+    return df
 
 
 def merge_time(df_ppg):

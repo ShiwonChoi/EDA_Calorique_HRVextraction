@@ -8,31 +8,25 @@ import neurokit2 as nk
 # Conditions and groupes
 ############################################################################
 
-ALLBASECOND = [
+ALLCOND = [
     #('shimmer_connected', 'Shimmer Connected'),
-    #('baseline_recording_start', 'Baseline Recording Start'),
+    #('experiment_start', 'Experiment Start'),
+    #('instruction_start', 'Instruction Start'),
+    #('instruction_end', 'Instruction End'),
     ('baseline_start', 'Baseline Start'),
     ('baseline_end', 'Baseline End'),
-    #('baseline_recording_stop', 'Baseline Recording Stop')
-]
-
-ALLSTIMCOND = [
-    #('shimmer_connected', 'Time Start'),
-    #('trial_recording_start', 'Recording Start'),
-    #('trial_start', 'Trial Start'),
-    ('pre_stimulation_baseline_start', 'Anticipation Start'),
-    ('pre_stimulation_baseline_end', 'Anticipation End'),
-    #('vibration_start', 'Vibration Start'),
-    #('countdown_start', 'Countdown Start'),
+    ('block_start', 'Block Start'),
+    ('countdown_start', 'Countdown Start'),
     #('countdown_end', 'Countdown End'),
-    ('stimulation_start', 'Task Start'),
-    #('vibration_stop', 'Vibration Start'),
-    #('vibration_count_final', 'Vibration Count End'),
-    ('recovery_start', 'Recovery Start'),
-    ('stimulation_end', 'Stimulation End'),
-    ('recovery_end', 'Recovery End'),
-    #('trial_end', 'Trial End'), 
-    #('trial_recording_stop', 'Trial Recording End')
+    ('sound_play_start', 'Sound Play Start'),
+    ('sound_play_end', 'Sound Play End'),
+    ('block_end', 'Block End'),
+    ('rest_start', 'Rest Start'),
+    ('rest_end', 'Rest End'),
+    ('post_recovery_start', 'Post Recovery Start'),
+    ('post_recovery_end', 'Post Recovery End'),
+    #('thankyou_screen', 'Thank You Screen'),
+    #('experiment_end', 'Experiment End'),
 ]
 
 
