@@ -4,38 +4,49 @@ import matplotlib.pyplot as plt
 from lib.config import *
 
 
-def load_corrected_peaks(participant_path, participant_id, df_ppg):
+def load_corrected_rri_for_participant(participant_path, participant_id,
+                                       use_physio=False, use_stat=False):
     """
-    Find corrected RRI CSVs for every trial under CORR_DIR / <participant_folder>.
+    Find and load the one corrected-RRI CSV for this participant's whole
+    continuous recording.
+
+    Unlike the old per-trial-file layout (one shimmer file + one corrected
+    CSV per trial), this format has exactly one shimmer file per participant,
+    so the corrected CSV — if one exists — is named after that same shimmer
+    file (e.g. Processed_PPG/SC_pilot/<shimmer_stem>..._rr_intervals_corrigé.csv),
+    not per trial/condition.
 
     Returns:
-        {trial: Path} for each trial whose corrected CSV was found, or {} if the
-        participant folder does not exist in CORR_DIR.
+        df_corr (pd.DataFrame | None), base_rri (int) — same shape as
+        load_corrected_rri; (None, 0) if no shimmer or corrected file is found.
     """
-    corr_dir = CORR_DIR / Path(participant_path).name
+    participant_path = Path(participant_path)
+    corr_dir = CORR_DIR / participant_path.name
     if not corr_dir.exists():
         print(f"  No corrected dir at {corr_dir} — using auto peaks only")
-        return {}
+        return None, 0
 
-    trial_condition = (
-        df_ppg[["trial", "condition"]]
-        .drop_duplicates()
-        .itertuples(index=False, name=None)
-    )
+    shimmer_files = sorted(participant_path.glob("shimmer_*.csv"))
+    if len(shimmer_files) != 1:
+        print(f"  Expected exactly one shimmer_*.csv in {participant_path}, "
+              f"found {len(shimmer_files)} — using auto peaks only")
+        return None, 0
 
-    corr_paths = {}
-    for trial, condition in sorted(trial_condition):
-        candidates = list(corr_dir.rglob(f"*{participant_id}*{trial}*{condition}*.csv"))
-        if candidates:
-            if len(candidates) > 1:
-                print(f"  WARNING: multiple corrected CSVs for {trial} — using {candidates[0].name}")
-            else:
-                print(f"  Corrected CSV ({trial}): {candidates[0].name}")
-            corr_paths[trial] = candidates[0]
-        else:
-            print(f"  No corrected CSV for {trial} ({condition})")
+    shimmer_stem = shimmer_files[0].stem.lower()
+    candidates = [
+        p for p in corr_dir.rglob("*.csv")
+        if p.stem.lower().startswith(shimmer_stem) and "corrig" in p.stem.lower()
+    ]
+    if not candidates:
+        print(f"  No corrected CSV matching '{shimmer_stem}*corrig*' in {corr_dir} "
+              f"— using auto peaks only")
+        return None, 0
+    if len(candidates) > 1:
+        print(f"  WARNING: multiple corrected CSVs matched — using {candidates[0].name}")
+    else:
+        print(f"  Corrected CSV: {candidates[0].name}")
 
-    return corr_paths
+    return load_corrected_rri(candidates[0], use_physio=use_physio, use_stat=use_stat)
 
 
 def _find_col(col_map, *candidates):
@@ -60,7 +71,7 @@ def load_corrected_rri(csv_path, use_physio=False, use_stat=False):
     Expected CSV columns:
         interval_index, rr_interval_ms,
         peak1_time_s, peak2_time_s     (seconds since Shimmer connected)
-        peak1_index,  peak2_index      (sample index in raw trial recording)
+        peak1_index,  peak2_index      (sample index in raw recording)
         heart_rate_bpm,
         peak1_classification, peak2_classification  ('AUTO' | 'MANUAL' | 'BAD')
         physiologically_valid          (True / False)
@@ -70,7 +81,7 @@ def load_corrected_rri(csv_path, use_physio=False, use_stat=False):
         An interval is kept only when BOTH peak1 and peak2 classification != 'BAD'.
 
     Args:
-        csv_path:   Direct path to the corrected RRI CSV (resolved by load_corrected_peaks).
+        csv_path:   Direct path to the corrected RRI CSV.
         use_physio: Also keep only physiologically_valid == True rows.
         use_stat:   Also keep only statistically_valid   == True rows.
 
@@ -132,102 +143,96 @@ def load_corrected_rri(csv_path, use_physio=False, use_stat=False):
     return df, base_rri
 
 
-def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
-                          use_physio=False, use_stat=False):
+def detect_peaks_full(df_ppg, fs):
     """
-    Process RRI intervals for a single trial.
+    Run NK2 PPG peak detection ONCE on the whole continuous session (not
+    per trial — a short trial slice, e.g. a brief baseline window, can have
+    too few samples/peaks for NK2's signal-quality step and raise).
 
     Returns:
-        rri_auto_ms    (np.ndarray)   : Within-event-window auto RRI in ms.
-        rri_auto_trial (np.ndarray)   : Trial label per RRI interval.
-        corr_by_trial  (dict)         : {trial: event-window-filtered corrected RRI DataFrame}.
-        signal         (pd.DataFrame) : NK2 signal with PPG_Peaks and PPG_Peaks_Corr.
-        info           (dict)         : NK2 info dict.
-        epoch_bounds   (dict)         : {trial: {"rel_lo","rel_hi","abs_lo","abs_hi"}} in ms.
-        base_rri       (int | None)   : Total RRI rows in the corrected CSV before any filtering;
-                                        None if no corrected CSV was loaded.
+        signal (pd.DataFrame) : NK2 signal with PPG_Peaks, plus PPG_Peaks_Corr
+                                 initialised to 0 (filled in by place_corrected_peaks).
+        info   (dict)         : NK2 info dict.
     """
     participant_id = df_ppg["participant"].iloc[0] if "participant" in df_ppg.columns else "unknown"
-    trial     = df_ppg["trial"].iloc[0]
-    trial_rel = df_ppg["rel_zero_ref (ms)"].values
-    print(f"\nProcessing PPG signal for {participant_id} — {trial}...")
+    print(f"\nDetecting PPG peaks for {participant_id} — full recording ({len(df_ppg)} samples)...")
 
-    # Event window bounds
-    epoch_bounds = {}
-    ev_ms = df_events.loc[df_events["trial"] == trial, "time_since_connected_ms"]
-    if not ev_ms.empty:
-        t_start = float(df_ppg["rel_zero_ref (ms)"].iloc[0])
-        first_ev, last_ev = float(ev_ms.iloc[0]), float(ev_ms.iloc[-1])
-        epoch_bounds[trial] = {
-            "rel_lo": first_ev, "rel_hi": last_ev,
-            "abs_lo": t_start + first_ev, "abs_hi": t_start + last_ev,
-        }
-        print(f"  Event window: [{first_ev/1000:.3f}s – {last_ev/1000:.3f}s]")
-
-    if not corr_paths:
-        print("  No corrected paths provided — using auto peaks only")
-
-    # NK2 peak detection
     signal, info = nk.ppg_process(df_ppg["PPG"], fs)
     signal["PPG_Peaks_Corr"] = 0
-    auto_idx = np.where(signal["PPG_Peaks"].values == 1)[0]
 
-    # Load corrected RRI, filter to event window, place peaks
-    corr_by_trial = {}
-    base_rri = None
-    if corr_paths and trial in corr_paths:
-        print(f"  Loading corrected RRI — {trial}...")
-        df_corr, base_rri = load_corrected_rri(corr_paths[trial], use_physio=use_physio, use_stat=use_stat)
-        if df_corr is not None:
-            col_map = {c.lower(): c for c in df_corr.columns}
-            t1_col  = _find_col(col_map, "peak1_time_s")
-            t2_col  = _find_col(col_map, "peak2_time_s")
-            if t1_col and t2_col:
-                if trial in epoch_bounds:
-                    lo, hi  = epoch_bounds[trial]["rel_lo"], epoch_bounds[trial]["rel_hi"]
-                    in_ep   = (
-                        (df_corr[t1_col] * 1000 >= lo) & (df_corr[t1_col] * 1000 <= hi) &
-                        (df_corr[t2_col] * 1000 >= lo) & (df_corr[t2_col] * 1000 <= hi)
-                    )
-                    n_before = len(df_corr)
-                    df_corr  = df_corr[in_ep].reset_index(drop=True)
-                    removed  = n_before - len(df_corr)
-                    if removed:
-                        print(f"    Epoch filter: {removed} intervals outside event window removed")
+    n_auto = int(signal["PPG_Peaks"].sum())
+    print(f"  {n_auto} auto peaks detected across full recording")
 
-                all_times_s = np.unique(np.concatenate([
-                    df_corr[t1_col].dropna().values,
-                    df_corr[t2_col].dropna().values,
-                ]))
-                corr_rel_ms = all_times_s * 1000
-                in_range    = (corr_rel_ms >= trial_rel[0]) & (corr_rel_ms <= trial_rel[-1])
-                print(f"    Corrected peaks placed: {in_range.sum()}/{len(corr_rel_ms)}")
-                for rel_ms in corr_rel_ms[in_range]:
-                    nearest = np.argmin(np.abs(trial_rel - rel_ms))
-                    signal.iat[nearest, signal.columns.get_loc("PPG_Peaks_Corr")] = 1
+    return signal, info
 
-            corr_by_trial[trial] = df_corr
 
-    # Event-window filter for auto peaks and RRI
-    if trial in epoch_bounds:
-        lo, hi     = epoch_bounds[trial]["rel_lo"], epoch_bounds[trial]["rel_hi"]
-        in_window  = (trial_rel[auto_idx] >= lo) & (trial_rel[auto_idx] <= hi)
-        auto_idx_w = auto_idx[in_window]
+def place_corrected_peaks(signal, df_ppg, df_corr, use_physio=False, use_stat=False):
+    """
+    Mark PPG_Peaks_Corr=1 on `signal` at the sample nearest each corrected
+    peak time in df_corr. df_corr (from load_corrected_rri_for_participant)
+    already covers the whole continuous recording, so no per-trial epoch
+    restriction is needed here — unlike the old per-trial version, there's
+    only one corrected file to place, once.
+    """
+    if df_corr is None or len(df_corr) == 0:
+        return signal
+
+    col_map = {c.lower(): c for c in df_corr.columns}
+    t1_col  = _find_col(col_map, "peak1_time_s")
+    t2_col  = _find_col(col_map, "peak2_time_s")
+    if not (t1_col and t2_col):
+        print("  WARNING: corrected CSV missing peak1_time_s/peak2_time_s — skipping placement")
+        return signal
+
+    rel_ms = df_ppg["rel_zero_ref (ms)"].values
+    all_times_s = np.unique(np.concatenate([
+        df_corr[t1_col].dropna().values,
+        df_corr[t2_col].dropna().values,
+    ]))
+    corr_rel_ms = all_times_s * 1000
+    in_range    = (corr_rel_ms >= rel_ms[0]) & (corr_rel_ms <= rel_ms[-1])
+    print(f"  Corrected peaks placed: {in_range.sum()}/{len(corr_rel_ms)}")
+
+    corr_col = signal.columns.get_loc("PPG_Peaks_Corr")
+    for rel in corr_rel_ms[in_range]:
+        nearest = np.argmin(np.abs(rel_ms - rel))
+        signal.iat[nearest, corr_col] = 1
+
+    return signal
+
+
+def extract_beats(signal, df_ppg):
+    """
+    Beat times (s) and RR intervals (ms) for the whole continuous recording.
+
+    Uses corrected peaks (PPG_Peaks_Corr) when any were placed, else falls
+    back to NK2's auto-detected peaks (PPG_Peaks) — participants without a
+    corrected CSV (e.g. SC_pilot today) still get RRI computed from auto peaks
+    instead of an all-zero PPG_Peaks_Corr column.
+
+    Returns:
+        beat_times (np.ndarray) : time (s) of each beat except the last.
+        rri_values (np.ndarray) : RR interval (ms) between successive beats.
+    """
+    if int(signal["PPG_Peaks_Corr"].sum()) > 0:
+        peak_idx = np.where(signal["PPG_Peaks_Corr"].values == 1)[0]
+        print(f"  Using {len(peak_idx)} corrected peaks for beat extraction")
     else:
-        auto_idx_w = auto_idx
+        peak_idx = np.where(signal["PPG_Peaks"].values == 1)[0]
+        print(f"  Using {len(peak_idx)} auto peaks for beat extraction (no corrected peaks)")
 
-    peak_times_w   = df_ppg["time_seconds"].values[auto_idx_w]
-    rri_auto_ms    = np.diff(peak_times_w) * 1000 if len(peak_times_w) > 1 else np.array([])
-    rri_auto_trial = np.full(len(rri_auto_ms), trial)
+    peak_times = df_ppg["time_seconds"].values[peak_idx]
+    if len(peak_times) > 1:
+        rri_values = np.diff(peak_times) * 1000
+        beat_times = peak_times[:-1]
+    else:
+        rri_values = np.array([])
+        beat_times = np.array([])
 
-    print(f"  {len(auto_idx)} auto peaks, {len(auto_idx_w)} in event window, "
-          f"{len(rri_auto_ms)} RRI intervals")
-    print(f"  Corrected peaks in signal: {int(signal['PPG_Peaks_Corr'].sum())}")
-
-    return rri_auto_ms, rri_auto_trial, corr_by_trial, signal, info, epoch_bounds, base_rri
+    return beat_times, rri_values
 
 
-def plot_corr_peaks(signal, df_ppg, df_events, corr_by_trial, participant, show=True):
+def plot_corr_peaks(signal, df_ppg, df_events, df_corr, participant, show=True):
     time     = df_ppg["time_seconds"].values
     ppg      = signal["PPG_Clean"].values
     auto_idx = np.where(signal["PPG_Peaks"].values == 1)[0]
