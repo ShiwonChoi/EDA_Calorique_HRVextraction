@@ -150,7 +150,7 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
     participant_id = df_ppg["participant"].iloc[0] if "participant" in df_ppg.columns else "unknown"
     trial     = df_ppg["trial"].iloc[0]
     trial_rel = df_ppg["rel_zero_ref (ms)"].values
-    print(f"\nProcessing PPG signal for {participant_id} — {trial}...")
+    print(f"\n  Processing PPG signal for {participant_id} — {trial}...")
 
     # Event window bounds
     epoch_bounds = {}
@@ -162,10 +162,10 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
             "rel_lo": first_ev, "rel_hi": last_ev,
             "abs_lo": t_start + first_ev, "abs_hi": t_start + last_ev,
         }
-        print(f"  Event window: [{first_ev/1000:.3f}s – {last_ev/1000:.3f}s]")
+        print(f"    Event window: [{first_ev/1000:.3f}s – {last_ev/1000:.3f}s]")
 
     if not corr_paths:
-        print("  No corrected paths provided — using auto peaks only")
+        print("     No corrected paths provided — using auto peaks only")
 
     # NK2 peak detection
     signal, info = nk.ppg_process(df_ppg["PPG"], fs)
@@ -176,7 +176,7 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
     corr_by_trial = {}
     base_rri = None
     if corr_paths and trial in corr_paths:
-        print(f"  Loading corrected RRI — {trial}...")
+        print(f"    Loading corrected RRI — {trial}...")
         df_corr, base_rri = load_corrected_rri(corr_paths[trial], use_physio=use_physio, use_stat=use_stat)
         if df_corr is not None:
             col_map = {c.lower(): c for c in df_corr.columns}
@@ -193,7 +193,7 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
                     df_corr  = df_corr[in_ep].reset_index(drop=True)
                     removed  = n_before - len(df_corr)
                     if removed:
-                        print(f"    Epoch filter: {removed} intervals outside event window removed")
+                        print(f"        Epoch filter: {removed} intervals outside event window removed")
 
                 all_times_s = np.unique(np.concatenate([
                     df_corr[t1_col].dropna().values,
@@ -201,7 +201,7 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
                 ]))
                 corr_rel_ms = all_times_s * 1000
                 in_range    = (corr_rel_ms >= trial_rel[0]) & (corr_rel_ms <= trial_rel[-1])
-                print(f"    Corrected peaks placed: {in_range.sum()}/{len(corr_rel_ms)}")
+                print(f"        Corrected peaks placed: {in_range.sum()}/{len(corr_rel_ms)}")
                 for rel_ms in corr_rel_ms[in_range]:
                     nearest = np.argmin(np.abs(trial_rel - rel_ms))
                     signal.iat[nearest, signal.columns.get_loc("PPG_Peaks_Corr")] = 1
@@ -220,9 +220,9 @@ def process_rri_intervals(df_ppg, df_events, fs, corr_paths=None,
     rri_auto_ms    = np.diff(peak_times_w) * 1000 if len(peak_times_w) > 1 else np.array([])
     rri_auto_trial = np.full(len(rri_auto_ms), trial)
 
-    print(f"  {len(auto_idx)} auto peaks, {len(auto_idx_w)} in event window, "
-          f"{len(rri_auto_ms)} RRI intervals")
-    print(f"  Corrected peaks in signal: {int(signal['PPG_Peaks_Corr'].sum())}")
+    print(f"    {len(auto_idx)} auto peaks, {len(auto_idx_w)} in event window, "
+          f"    {len(rri_auto_ms)} RRI intervals")
+    print(f"    Corrected peaks in signal: {int(signal['PPG_Peaks_Corr'].sum())}")
 
     return rri_auto_ms, rri_auto_trial, corr_by_trial, signal, info, epoch_bounds, base_rri
 
