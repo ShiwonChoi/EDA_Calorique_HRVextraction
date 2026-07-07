@@ -21,8 +21,9 @@ __pycache__/
 # VSCode editor settings
 .vscode/
 
-# Generated results/figures
+# Generated results/figures/plots
 Results/
+Plots/
 
 # Scratch files
 testspace.py

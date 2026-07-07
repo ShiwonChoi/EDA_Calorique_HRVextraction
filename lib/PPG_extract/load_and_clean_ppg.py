@@ -13,14 +13,14 @@ def load_ppg(participant_path, show=True):
     continuous recording (baseline + all blocks + post-recovery in one file).
 
     Args:
-        participant_path: Path to the SC_## participant folder.
+        participant_path: Path to the SBSA_##/SBAA_## participant folder.
         show: If True, print a loading summary.
 
     Returns:
         df_ppg         : Shimmer DataFrame for the whole session.
         df_events      : Event-log DataFrame with 'trial'/'condition' columns
                           derived by assign_trial_condition.
-        participant_id : Folder name (e.g. "SC_18").
+        participant_id : Folder name (e.g. "SBSA_02").
     """
     participant_path = Path(participant_path)
     participant_id = participant_path.name
@@ -185,7 +185,7 @@ def tag_ppg_trial_condition(df_ppg, df_events, participant_id):
 def load_and_clean_ppg(participants_path, show=False):
     """
     Args:
-        participants_path : Path to the SC_## participant folder.
+        participants_path : Path to the SBSA_##/SBAA_## participant folder.
         show               : If True, display raw signal quality plot after loading.
     """
     df_ppg_raw, df_events, participant_id = load_ppg(participants_path, show=show)

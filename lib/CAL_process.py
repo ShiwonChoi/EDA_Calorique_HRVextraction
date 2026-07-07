@@ -15,7 +15,7 @@ from lib.Metric_extraction.HRV_freq_extract import (
 )
 from lib.Metric_extraction.HRV_freq_bin import bin_totalbandpower, bin_bandpower_30s
 from lib.Metric_extraction.HRV_df import build_result_row
-from lib.config import OUTPUT_COLUMNS
+from lib.config import OUTPUT_COLUMNS, group_from_participant
 
 
 def _masked_count(beat_times, t_start, t_end):
@@ -71,7 +71,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         other rows are corrected per-frequency against trial 0.
 
     Returns:
-        participant_id (str)         : Participant identifier (e.g. "SC_pilot").
+        participant_id (str)         : Participant identifier (e.g. "SBSA_02").
         df_temp        (pd.DataFrame): Temporal HRV rows, schema = OUTPUT_COLUMNS.
         df_freq        (pd.DataFrame): Frequency HRV rows, schema = OUTPUT_COLUMNS.
     """
@@ -281,6 +281,12 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
 
+        # Study-group tag (HC = SBSA controls, T = SBAA tinnitus), placed
+        # right after the participant column.
+        groupe = group_from_participant(participant_id)
+        df_temp.insert(1, 'groupe', groupe)
+        df_freq.insert(1, 'groupe', groupe)
+
         print(f"\n{'=' * 55}")
         print(f"  All trials processed for {participant_id}.")
         print(f"  CAL_temp rows : {len(df_temp)}")
@@ -295,4 +301,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         traceback.print_exc()
         df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        groupe = group_from_participant(participant_id)
+        df_temp.insert(1, 'groupe', groupe)
+        df_freq.insert(1, 'groupe', groupe)
         return participant_id, df_temp, df_freq

@@ -10,9 +10,11 @@ from lib.CAL_process import full_process_single
 
 def batch_process_all(participants_dir=DATA_DIR):
     """
-    Process all SC_* participant folders and return two consolidated
-    DataFrames — one for temporal HRV (CAL_temp) and one for frequency
-    HRV (CAL_freq) — covering the full cohort.
+    Process all sound-stress participant folders (SBSA_* controls and
+    SBAA_* tinnitus) and return two consolidated DataFrames — one for
+    temporal HRV (CAL_temp) and one for frequency HRV (CAL_freq) —
+    covering the full cohort. Each row carries a `groupe` tag
+    (HC = SBSA control, T = SBAA tinnitus).
 
     Returns
     -------

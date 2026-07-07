@@ -13,7 +13,7 @@ def load_corrected_rri_for_participant(participant_path, participant_id,
     Unlike the old per-trial-file layout (one shimmer file + one corrected
     CSV per trial), this format has exactly one shimmer file per participant,
     so the corrected CSV — if one exists — is named after that same shimmer
-    file (e.g. Processed_PPG/SC_pilot/<shimmer_stem>..._rr_intervals_corrigé.csv),
+    file (e.g. Processed_PPG/SBSA_02/<shimmer_stem>..._rr_intervals_corrigé.csv),
     not per trial/condition.
 
     Returns:
@@ -207,7 +207,7 @@ def extract_beats(signal, df_ppg):
 
     Uses corrected peaks (PPG_Peaks_Corr) when any were placed, else falls
     back to NK2's auto-detected peaks (PPG_Peaks) — participants without a
-    corrected CSV (e.g. SC_pilot today) still get RRI computed from auto peaks
+    corrected CSV still get RRI computed from auto peaks
     instead of an all-zero PPG_Peaks_Corr column.
 
     Returns:
