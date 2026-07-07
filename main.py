@@ -30,6 +30,7 @@ def batch_process_all(participants_dir=DATA_DIR):
 
     all_temp = []
     all_freq = []
+    all_vas  = []
     successful = 0
     failed     = 0
 
@@ -44,9 +45,9 @@ def batch_process_all(participants_dir=DATA_DIR):
         print(f"\n[{i}/{len(participant_paths)}] Processing: {p_path.name} ...")
 
         try:
-            _, df_temp, df_freq = full_process_single(p_path, 
-                                                      use_physio=True, use_stat=False, 
-                                                      show=False, 
+            _, df_temp, df_freq, df_vas = full_process_single(p_path,
+                                                      use_physio=True, use_stat=False,
+                                                      show=False,
                                                       bin=30)
 
             if df_temp.empty and df_freq.empty:
@@ -56,9 +57,10 @@ def batch_process_all(participants_dir=DATA_DIR):
 
             all_temp.append(df_temp)
             all_freq.append(df_freq)
+            all_vas.append(df_vas)
             processed.add(p_path.name)
             successful += 1
-            print(f"  -> SUCCESS  ({len(df_temp)} temp rows, {len(df_freq)} freq rows)")
+            print(f"  -> SUCCESS  ({len(df_temp)} temp rows, {len(df_freq)} freq rows, {len(df_vas)} vas rows)")
 
         except Exception as e:
             print(f"  -> FAILED: {e}")
@@ -72,8 +74,9 @@ def batch_process_all(participants_dir=DATA_DIR):
 
     df_temp_all = pd.concat(all_temp, ignore_index=True) if all_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
     df_freq_all = pd.concat(all_freq, ignore_index=True) if all_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
+    df_vas_all  = pd.concat(all_vas,  ignore_index=True) if all_vas  else pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    return df_temp_all, df_freq_all
+    return df_temp_all, df_freq_all, df_vas_all
 
 
 # ============================================================================
@@ -86,7 +89,7 @@ if __name__ == "__main__":
     if not DATA_DIR.exists():
         raise FileNotFoundError(f"Data folder not found at {DATA_DIR}")
 
-    df_temp, df_freq = batch_process_all()
+    df_temp, df_freq, df_vas = batch_process_all()
 
     print("\nTemporal HRV results:")
     print(df_temp.head())
@@ -94,12 +97,18 @@ if __name__ == "__main__":
     print("\nFrequency HRV results:")
     print(df_freq.head())
 
+    print("\nVAS (subjective stress) results:")
+    print(df_vas.head())
+
     # Save to Results/ using output_file stem from config
     temp_out = output_file.with_name(output_file.stem + "_temp.csv")
     freq_out = output_file.with_name(output_file.stem + "_freq.csv")
+    vas_out  = output_file.with_name("processed_vas_results.csv")
 
     df_temp.to_csv(temp_out, index=False)
     df_freq.to_csv(freq_out, index=False)
+    df_vas.to_csv(vas_out, index=False)
 
     print(f"\n\nTemporal results saved to : {temp_out}")
     print(f"Frequency results saved to : {freq_out}")
+    print(f"VAS results saved to       : {vas_out}")

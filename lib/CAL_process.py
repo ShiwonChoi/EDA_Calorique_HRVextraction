@@ -15,6 +15,9 @@ from lib.Metric_extraction.HRV_freq_extract import (
 )
 from lib.Metric_extraction.HRV_freq_bin import bin_totalbandpower, bin_bandpower_30s
 from lib.Metric_extraction.HRV_df import build_result_row
+from lib.Metric_extraction.VAS_extract import (
+    get_vas_recording_offset, load_touch_vas, get_vas_metrics, bin_vas_30s,
+)
 from lib.config import OUTPUT_COLUMNS, group_from_participant
 
 
@@ -70,18 +73,27 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         Baseline rows carry diff/pct_change/log_ratio = 0.0 by convention;
         other rows are corrected per-frequency against trial 0.
 
+    CAL_vas collects subjective-stress VAS rows (VAS_mean, VAS_median, VAS_std)
+    from touch_data_*.csv, mapped onto the shimmer-connected timeline and
+    binned over the SAME task windows / 30-s bins as CAL_temp, baseline-
+    referenced the same way. Skipped (empty) if no touch_data / recording
+    marker is present.
+
     Returns:
         participant_id (str)         : Participant identifier (e.g. "SBSA_02").
         df_temp        (pd.DataFrame): Temporal HRV rows, schema = OUTPUT_COLUMNS.
         df_freq        (pd.DataFrame): Frequency HRV rows, schema = OUTPUT_COLUMNS.
+        df_vas         (pd.DataFrame): VAS rows, schema = OUTPUT_COLUMNS.
     """
     participant_path = Path(participant_path)
     print(f"\nParticipant folder : {participant_path.name}")
 
     CAL_temp              = []
     CAL_freq              = []
+    CAL_vas               = []
     baseline_temp_raw     = None
     baseline_per_freq_raw = None
+    baseline_vas_raw      = None
     participant_id        = None
 
     try:
@@ -152,6 +164,14 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         print("\n  Computing CWT for full recording...")
         cwt_r = run_cwt_compute(results['intervals_filtered'], results['t_resampled'],
                                 results['fs_resample'], verbose=False)
+
+        # ── 5b. VAS (subjective stress) — load once, optional ───────────────
+        # touch_data_*.csv is independent of PPG; a missing file/marker just
+        # skips VAS extraction without failing the participant.
+        vas_offset = get_vas_recording_offset(participant_path)
+        df_touch   = load_touch_vas(participant_path, vas_offset)
+        if df_touch is None:
+            print("  No VAS/touch data — VAS extraction skipped for this participant")
 
         # ── 6. Per-trial loop: masking / labeling / binning only ────────────
         for trial in trials:
@@ -266,6 +286,41 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                     for r in total.to_dict('records')
                 ))
 
+                # ── 6c. VAS (subjective stress) ────────────────────────────
+                # Same task window / 30-s bins / baseline reference as the
+                # temporal HRV metrics above.
+                if df_touch is not None:
+                    vas_metrics, vas_n = get_vas_metrics(df_touch, task_window[0], task_window[1])
+                    if condition == 'baseline':
+                        baseline_vas_raw = vas_metrics
+
+                    for metric_name, metric_value in vas_metrics.items():
+                        bl = (baseline_vas_raw or {}).get(metric_name, float('nan'))
+                        CAL_vas.extend(build_result_row(
+                            participant_id=participant_id,
+                            trial=trial,
+                            condition=condition,
+                            time_interval_rel_start=0.0,
+                            time_interval_abs_start=task_window[0],
+                            time_interval_rel_end=task_window[1] - task_window[0],
+                            time_interval_abs_end=task_window[1],
+                            task_moment=total_task_moment, recording_type='total',
+                            metric_name=metric_name, metric_value=metric_value,
+                            baseline_mean=bl, sample_size=f"{vas_n}",
+                        ))
+
+                    # 30-s binned VAS — stim trials only (baseline kept whole)
+                    if condition != 'baseline':
+                        vas_binned = bin_vas_30s(
+                            df_touch, trial, condition, task_window, df_events_t,
+                            participant_id, baseline_vas_raw or {}, bin_width=bin,
+                        )
+                        CAL_vas.extend(vas_binned.to_dict('records'))
+
+                    print("  VAS total: " + "  ".join(
+                        f"{k}={v:.2f}" for k, v in vas_metrics.items()
+                    ))
+
             except Exception as trial_err:
                 import traceback
                 print(f"\n  ERROR processing trial {trial}: {trial_err}")
@@ -276,24 +331,27 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                 }
                 CAL_temp.append(failed_row)
                 CAL_freq.append(failed_row)
+                CAL_vas.append(failed_row)
 
-        # Output dataframes for HRV temp and freq metrics
+        # Output dataframes for HRV temp/freq and VAS metrics
         df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        df_vas  = pd.DataFrame(CAL_vas,  columns=OUTPUT_COLUMNS) if CAL_vas  else pd.DataFrame(columns=OUTPUT_COLUMNS)
 
         # Study-group tag (HC = SBSA controls, T = SBAA tinnitus), placed
         # right after the participant column.
         groupe = group_from_participant(participant_id)
-        df_temp.insert(1, 'groupe', groupe)
-        df_freq.insert(1, 'groupe', groupe)
+        for _df in (df_temp, df_freq, df_vas):
+            _df.insert(1, 'groupe', groupe)
 
         print(f"\n{'=' * 55}")
         print(f"  All trials processed for {participant_id}.")
         print(f"  CAL_temp rows : {len(df_temp)}")
         print(f"  CAL_freq rows : {len(df_freq)}")
+        print(f"  CAL_vas  rows : {len(df_vas)}")
         print(f"{'=' * 55}")
 
-        return participant_id, df_temp, df_freq
+        return participant_id, df_temp, df_freq, df_vas
 
     except Exception as e:
         import traceback
@@ -301,7 +359,8 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         traceback.print_exc()
         df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        df_vas  = pd.DataFrame(CAL_vas,  columns=OUTPUT_COLUMNS) if CAL_vas  else pd.DataFrame(columns=OUTPUT_COLUMNS)
         groupe = group_from_participant(participant_id)
-        df_temp.insert(1, 'groupe', groupe)
-        df_freq.insert(1, 'groupe', groupe)
-        return participant_id, df_temp, df_freq
+        for _df in (df_temp, df_freq, df_vas):
+            _df.insert(1, 'groupe', groupe)
+        return participant_id, df_temp, df_freq, df_vas
