@@ -84,6 +84,28 @@ CWT_N_CYCLES_LOW  = 5
 CWT_N_CYCLES_HIGH = 15
 
 
+# ============================================================================
+# GSR / EDA (ELECTRODERMAL ACTIVITY) PARAMETERS
+# ============================================================================
+# Physiologically-plausible conductance range and max slope, used to flag
+# artifacts (e.g. Shimmer auto-range switching) before tonic/phasic
+# decomposition. Source: Kleckner et al. (2018), IEEE TBME 65(7), 1460-1467.
+GSR_PLAUSIBLE_RANGE_US  = (0.05, 60.0)   # microSiemens
+GSR_MAX_SLOPE_US_PER_S  = 10.0           # microSiemens / second
+
+# Tonic/phasic decomposition method, passed through to nk.eda_phasic.
+# 'highpass' (default, no extra deps) and 'cvxeda' (Greco et al. 2016, needs
+# the cvxopt package) are the two primary supported options; 'sparse'
+# (Hernando-Gallego et al. 2018) is available but flagged experimental by
+# NeuroKit2 itself.
+GSR_DECOMPOSITION_METHOD = 'highpass'
+
+# Minimum SCR amplitude (microSiemens) for nk.eda_peaks to count a phasic
+# peak as a genuine skin conductance response. 0.1 matches NeuroKit2's own
+# default; the EDA literature also uses 0.05 (legacy) or 0.01 (modern
+# high-resolution digital systems) — adjust here if needed.
+SCR_AMPLITUDE_MIN_US = 0.1
+
 
 # Pathways
 ############################################################################

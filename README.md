@@ -10,8 +10,9 @@ Each participant undergoes a baseline recording followed by caloric-stimulation
 trials. During those trials the Shimmer wearable records photoplethysmography
 (PPG) and galvanic skin response (GSR), while eye-tracking captures the
 nystagmus (and VOR) response evoked by the caloric stimulus. This repository
-turns the raw per-trial recordings into clean, baseline-referenced HRV (and,
-on some branches, EDA) feature tables ready for statistical analysis.
+turns the raw per-trial recordings into clean, baseline-referenced HRV and
+EDA (electrodermal activity / GSR) feature tables ready for statistical
+analysis.
 
 **Author:** Shiwon Choi
 
@@ -25,9 +26,9 @@ target different experiments or serve as an archive.
 
 | Branch | Status | Purpose |
 |--------|--------|---------|
-| **`main`** | **Active** | Canonical **PPG → HRV** pipeline for the caloric-stress (SC) cohort. Extracts temporal and frequency-domain HRV per trial, baseline-referenced against each participant's own baseline. This is the branch documented in detail below. |
-| **`SoundStress_HRV`** | **Active** | The **Sound Stress project** — a *separate analysis* of the **SBSA** participant files. Adapts the same PPG/HRV extraction to the Sound Stress experiment, whose acquisition format differs from the SC study (session-based `shimmer`, `event_log`, `distress_rating`, and `touch_data` files rather than the SC per-trial layout). This is the branch used for the SoundStress analysis. |
-| **`Nested_HRVextraction_archive`** | **Archived — not used** | A frozen snapshot kept "just in case." Preserves the **old nested folder architecture** (everything under a duplicated `EDA_calorique_HRVextraction/` subfolder) together with the early **GSR / electrodermal-activity (EDA) planning documents** — `GSR_EDA_extraction_plan.md` and a peer-review-grounded `GSR_EDA_literature_review.md`. These are *planning and literature only*; no EDA extraction code was implemented. Not maintained; retained purely for reference. |
+| **`main`** | **Active** | Canonical **PPG → HRV** and **GSR → EDA** pipeline for the caloric-stress (SC) cohort. Extracts temporal and frequency-domain HRV, plus tonic/phasic EDA, per trial, baseline-referenced against each participant's own baseline. This is the branch documented in detail below. |
+| **`SoundStress_HRV`** | **Active** | The **Sound Stress project** — a *separate analysis* of the **SBSA/SBAA** participant files. Adapts the same PPG/HRV/EDA extraction (plus a subjective-stress VAS trace) to the Sound Stress experiment, whose acquisition format differs from the SC study (one continuous session-based `shimmer`/`event_log`/`touch_data` recording rather than the SC per-trial layout). This is the branch used for the SoundStress analysis. |
+| **`Nested_HRVextraction_archive`** | **Archived — not used** | A frozen snapshot kept "just in case." Preserves the **old nested folder architecture** (everything under a duplicated `EDA_calorique_HRVextraction/` subfolder) together with the early **GSR / electrodermal-activity (EDA) planning documents** — `GSR_EDA_extraction_plan.md` and a peer-review-grounded `GSR_EDA_literature_review.md`, which informed the EDA implementation later carried out on `main` and `SoundStress_HRV`. Not maintained; retained purely for reference. |
 
 > **Note on the naming.** These branches were previously named
 > `EDA_SoundStress_HRVextraction` (now `Nested_HRVextraction_archive`) and
@@ -40,8 +41,9 @@ target different experiments or serve as an archive.
 
 ## What the pipeline does (`main` branch)
 
-`main.py` batch-processes every `SC_*` participant folder and produces two
-consolidated HRV tables. For each participant, `full_process_single`
+`main.py` batch-processes every `SC_*` participant folder and produces three
+consolidated tables (temporal HRV, frequency HRV, GSR/EDA). For each
+participant, `full_process_single`
 (`lib/CAL_process.py`) runs an independent pipeline **per trial**
 (`Trial00` = baseline, followed by the caloric-stimulation trials). The
 stimulation trials correspond to the four bithermal caloric irrigations:
@@ -63,29 +65,36 @@ stimulation trials correspond to the four bithermal caloric irrigations:
 5. **Frequency HRV** (`HRV_freq_extract.py`) — continuous wavelet transform
    (adaptive Morlet) to estimate band power in the **VLF / LF / HF** bands
    (Task Force 1996), with whole-trial and 30-second binned values.
-6. **Baseline referencing** — every stimulation metric is expressed relative to
-   the participant's own baseline (`Trial00`) as `raw`, `diff`, `pct_change`,
-   and `log_ratio` value types.
+6. **GSR/EDA** (`lib/GSR_extract/gsr_preprocess.py`) — the same trial's raw
+   Shimmer `GSR` channel (skin resistance, kOhm) is converted to conductance
+   (µS), artifact-checked, and split into a slow **tonic** (skin conductance
+   level) and fast **phasic** (skin conductance response) component via
+   NeuroKit2 (`gsr_method`, default `'highpass'`). `Tonic_SCL_mean/slope` and
+   `Phasic_SCR_count/rate/amplitude/AUC` are computed whole-trial and in
+   30-second bins, same as the HRV metrics.
+7. **Baseline referencing** — every stimulation metric (HRV and GSR/EDA alike)
+   is expressed relative to the participant's own baseline (`Trial00`) as
+   `raw`, `diff`, `pct_change`, and `log_ratio` value types.
 
-Both temporal and frequency outputs share a single unified schema
-(`OUTPUT_COLUMNS` in `lib/config.py`), so the two tables are directly stackable.
+Temporal HRV, frequency HRV, and GSR/EDA outputs all share a single unified
+schema (`OUTPUT_COLUMNS` in `lib/config.py`), so the three tables are directly
+stackable.
 
 ---
 
 ## Requirements
 
 - **Python 3.9+**
-- Python packages:
-  - `neurokit2`
-  - `pandas`
-  - `numpy`
-  - `scipy`
-  - `matplotlib`
+- Python packages (see `requirements.txt`):
+  - `neurokit2` — peak detection, signal processing, EDA decomposition
+  - `pandas`, `numpy`, `scipy`, `matplotlib`
+  - `cvxopt` — only exercised if GSR/EDA is run with `gsr_method='cvxeda'`;
+    the default `'highpass'` method doesn't need it
 
 Install with:
 
 ```bash
-pip install neurokit2 pandas numpy scipy matplotlib
+pip install -r requirements.txt
 ```
 
 ---
@@ -120,8 +129,8 @@ Data/
 - Trials are discovered automatically from the `shimmer_*.csv` filenames.
 - `Trial00` (`baseline`) is required per participant — it is the reference all
   stimulation trials are corrected against.
-- The Shimmer CSV carries both the PPG channel (used here) and the GSR channel
-  (consumed by the EDA branch).
+- The Shimmer CSV carries both the PPG channel (HRV) and the GSR channel
+  (tonic/phasic EDA) — both are extracted by this branch.
 
 ---
 
@@ -149,14 +158,37 @@ seconds (default `30`).
 
 ## Output
 
-Two CSV files are written to `Results/` (folder is git-ignored):
+Three CSV files are written to `Results/` (folder is git-ignored):
 
 | File | Contents |
 |------|----------|
 | `processed_ppg_results_temp.csv` | Temporal HRV metrics (`mean_HR`, `mean_RRI`, `RMSSD`, `SDNN`) — whole-trial and 30-s bins. |
 | `processed_ppg_results_freq.csv` | Frequency-domain band power (`VLF`, `LF`, `HF`) — whole-trial and 30-s bins. |
+| `processed_ppg_results_gsr.csv`  | Tonic/phasic EDA metrics — whole-trial and 30-s bins. |
 
-Both files use the same long-format schema (`OUTPUT_COLUMNS`):
+**HRV metrics** reflect autonomic activity on the heart (a mix of sympathetic
+and parasympathetic/vagal influence): `mean_HR`/`mean_RRI` are average heart
+rate and beat interval; `RMSSD` (beat-to-beat variability) is the standard
+proxy for vagal/parasympathetic tone; `SDNN` is overall variability. `VLF`/
+`LF`/`HF` are the same beat-interval series decomposed by oscillation speed —
+`HF` tracks respiration-linked vagal activity, `LF` is traditionally linked to
+sympathetic/baroreflex activity but is now considered a mixed signal.
+
+**GSR/EDA metrics** reflect sweat-gland activity driven by the sympathetic
+nervous system only (no vagal contribution), split into a slow **tonic**
+background level and fast **phasic** response spikes:
+
+| `Metric` | Component | Meaning |
+|----------|-----------|---------|
+| `Tonic_SCL_mean`            | Tonic  | Average background skin conductance (µS) — higher means more sustained sympathetic arousal. |
+| `Tonic_SCL_slope`           | Tonic  | Linear trend of the background level (µS/s) — rising = building arousal, falling = habituation/recovery. |
+| `Phasic_SCR_count`          | Phasic | Number of distinct skin-conductance-response spikes detected in the window. |
+| `Phasic_SCR_rate`           | Phasic | Same count, normalized to responses per minute. |
+| `Phasic_SCR_amplitude_mean` | Phasic | Average size (µS) of the detected responses. |
+| `Phasic_SCR_amplitude_sum`  | Phasic | Total size (µS) of all detected responses added together. |
+| `Phasic_AUC`                | Phasic | Area under the phasic curve (µS·s) — combines response count and size into one measure. |
+
+All three files use the same long-format schema (`OUTPUT_COLUMNS`):
 
 ```
 participant, trial, condition,
@@ -172,7 +204,8 @@ sample_size, status, error
 - `Value_type` encodes the baseline reference: baseline rows carry `raw`
   values (with `diff`/`pct_change`/`log_ratio` = 0.0 by convention), while
   stimulation rows carry all four value types relative to `Trial00`.
-- `sample_size` reports `"<n_clean> / <n_raw>"` beats after artifact removal.
+- `sample_size` reports `"<n_clean> / <n_raw>"` — beats after artifact removal
+  for HRV rows, or non-artifact/total GSR samples in the window for EDA rows.
 
 ---
 
@@ -188,12 +221,16 @@ lib/
 │   ├── load_and_clean_ppg.py   # Load Shimmer CSV, attach events, resample
 │   ├── ppg_preprocess.py       # PPG cleaning / peak detection
 │   └── manual_peak.py          # Corrected-peak loading, RRI intervals
+├── GSR_extract/
+│   └── gsr_preprocess.py       # Conductance conversion, artifacts, tonic/phasic decomposition, SCR peaks
 └── Metric_extraction/
     ├── RRI_preprocess.py       # Artifact removal, resampling, detrending
     ├── HRV_temp_extract.py     # Temporal HRV metrics
     ├── HRV_temp_bin.py         # 30-s temporal binning
     ├── HRV_freq_extract.py     # CWT band-power extraction
     ├── HRV_freq_bin.py         # Total / 30-s frequency binning
+    ├── EDA_temp_extract.py     # Tonic/phasic EDA metrics
+    ├── EDA_bin.py              # 30-s EDA binning
     └── HRV_df.py               # Unified output-row builder
 ```
 
