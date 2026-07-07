@@ -19,15 +19,22 @@ on some branches, EDA) feature tables ready for statistical analysis.
 
 ## Repository branches
 
-The project is split across three branches, each serving a distinct purpose.
-They share the same core architecture (`lib/`, `main.py`, unified output
-schema) but target different signals or experiments.
+The project spans three branches, each serving a distinct purpose. They share
+the same core architecture (`lib/`, `main.py`, unified output schema) but
+target different experiments or serve as an archive.
 
-| Branch | Purpose |
-|--------|---------|
-| **`main`** | Canonical **PPG → HRV** pipeline for the caloric-stress (SC) cohort. Extracts temporal and frequency-domain HRV per trial, baseline-referenced against each participant's own baseline. This is the branch documented in detail below. |
-| **`EDA_SoundStress_HRVextraction`** | Extends the caloric-stress study with a parallel **GSR / electrodermal-activity (EDA)** pipeline (tonic/phasic decomposition, SCR features) mirroring the HRV pipeline's structure and output schema. Includes `GSR_EDA_extraction_plan.md` and a peer-review-grounded `GSR_EDA_literature_review.md`. Work in progress. |
-| **`EDA_SoundStress_HRVextraction_v2`** | Adapts the same PPG/HRV extraction to the **Sound Stress ("SBSA")** experiment, whose acquisition format differs (session-based `shimmer`, `event_log`, `distress_rating`, and `touch_data` files rather than the SC per-trial layout). |
+| Branch | Status | Purpose |
+|--------|--------|---------|
+| **`main`** | **Active** | Canonical **PPG → HRV** pipeline for the caloric-stress (SC) cohort. Extracts temporal and frequency-domain HRV per trial, baseline-referenced against each participant's own baseline. This is the branch documented in detail below. |
+| **`SoundStress_HRV`** | **Active** | The **Sound Stress project** — a *separate analysis* of the **SBSA** participant files. Adapts the same PPG/HRV extraction to the Sound Stress experiment, whose acquisition format differs from the SC study (session-based `shimmer`, `event_log`, `distress_rating`, and `touch_data` files rather than the SC per-trial layout). This is the branch used for the SoundStress analysis. |
+| **`Nested_HRVextraction_archive`** | **Archived — not used** | A frozen snapshot kept "just in case." Preserves the **old nested folder architecture** (everything under a duplicated `EDA_calorique_HRVextraction/` subfolder) together with the early **GSR / electrodermal-activity (EDA) planning documents** — `GSR_EDA_extraction_plan.md` and a peer-review-grounded `GSR_EDA_literature_review.md`. These are *planning and literature only*; no EDA extraction code was implemented. Not maintained; retained purely for reference. |
+
+> **Note on the naming.** These branches were previously named
+> `EDA_SoundStress_HRVextraction` (now `Nested_HRVextraction_archive`) and
+> `EDA_SoundStress_HRVextraction_v2` (now `SoundStress_HRV`). They were renamed
+> to make the versions and their intent unambiguous: `SoundStress_HRV` is the
+> live SoundStress/SBSA analysis, and `Nested_HRVextraction_archive` is a
+> read-only archive of the old nested layout and EDA planning notes.
 
 ---
 
