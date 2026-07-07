@@ -29,6 +29,16 @@ Flat layout, one continuous session per participant:
   intervals (manually reviewed peaks). Used when present; otherwise auto peaks.
 - `distress_rating_*.csv/.xlsx` — **ignored**.
 
+## Setup
+
+Requires Python 3.10+ and the packages in [`requirements.txt`](requirements.txt):
+**numpy**, **pandas**, **scipy**, **matplotlib**, and **neurokit2** (PPG peak
+detection / signal processing; pulls in PyWavelets). Install with:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Running
 
 ```bash

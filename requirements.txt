@@ -1,0 +1,7 @@
+# Sound Stress HRV & VAS extraction — runtime dependencies
+# Versions below are the ones this branch was developed/tested against.
+numpy>=2.4.4
+pandas>=2.3.3
+scipy>=1.17.1
+matplotlib>=3.10.9
+neurokit2>=0.2.13
