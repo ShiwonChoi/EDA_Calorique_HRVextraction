@@ -1,10 +1,10 @@
-# Sound Stress — HRV & VAS extraction (`SoundStress_HRV`)
+# Sound Stress — HRV, VAS & GSR/EDA extraction (`SoundStress_HRV`)
 
 This branch processes the **Sound Stress** experiment: one continuous Shimmer
 PPG/GSR recording per participant (baseline + 6 stimulus blocks +
 post-recovery), plus a continuous subjective-stress VAS trace. It produces
-per-trial and 30-second-binned **temporal HRV**, **frequency HRV**, and **VAS**
-metrics in a shared long-format schema.
+per-trial and 30-second-binned **temporal HRV**, **frequency HRV**, **VAS**,
+and **tonic/phasic GSR/EDA** metrics in a shared long-format schema.
 
 ## Cohort & groups
 
@@ -21,7 +21,8 @@ Both prefixes are discovered automatically by the batch runner.
 
 Flat layout, one continuous session per participant:
 
-- `shimmer_*.csv` — raw Shimmer PPG/GSR (`Internal ADC A13` = PPG).
+- `shimmer_*.csv` — raw Shimmer PPG/GSR (`Internal ADC A13` = PPG, `GSR` = skin
+  resistance in kOhm, converted to conductance for EDA analysis).
 - `event_log_*_aligned.csv` — event log **aligned to the Shimmer clock** (used).
   The non-`_aligned` `event_log_*.csv` (absolute clock) is **ignored**.
 - `touch_data_*.csv` — continuous VAS recording (subjective stress).
@@ -32,8 +33,10 @@ Flat layout, one continuous session per participant:
 ## Setup
 
 Requires Python 3.10+ and the packages in [`requirements.txt`](requirements.txt):
-**numpy**, **pandas**, **scipy**, **matplotlib**, and **neurokit2** (PPG peak
-detection / signal processing; pulls in PyWavelets). Install with:
+**numpy**, **pandas**, **scipy**, **matplotlib**, **neurokit2** (PPG peak
+detection / signal processing / EDA decomposition; pulls in PyWavelets), and
+**cvxopt** (only exercised if GSR/EDA is run with `gsr_method='cvxeda'`;
+the default `'highpass'` method doesn't need it). Install with:
 
 ```bash
 pip install -r requirements.txt
@@ -52,10 +55,11 @@ Outputs are written to `Results/`:
 | `processed_ppg_results_temp.csv` | Temporal HRV                     |
 | `processed_ppg_results_freq.csv` | Frequency HRV (band power)       |
 | `processed_vas_results.csv`      | VAS subjective-stress statistics |
+| `processed_gsr_results.csv`      | Tonic/phasic GSR/EDA statistics  |
 
-## Output schema (shared by all three CSVs)
+## Output schema (shared by all four CSVs)
 
-All three files are **long format** with one row per
+All four files are **long format** with one row per
 `(trial × condition × Metric × Value_type × recording window)`:
 
 | Column                      | Description |
@@ -94,8 +98,8 @@ combining the sound label with the stimulus design, e.g.
   `anticipation` (block_start→countdown_start), `task`
   (sound_play_start→sound_play_end), `recovery` (rest, or post_recovery for
   block 6), or `unclassified`.
-- **VAS and HRV bins share identical bin edges**, so rows can be joined on
-  `trial` + `time_interval_abs_start`/`_end`.
+- **VAS, HRV, and GSR bins share identical bin edges**, so rows can be joined
+  on `trial` + `time_interval_abs_start`/`_end`.
 
 ### `Value_type` (baseline referencing)
 
@@ -107,22 +111,56 @@ Each metric appears in four rows:
 - `log_ratio` — `ln(value / baseline)`.
 
 Baseline (trial 0) rows carry `raw` and set `diff`/`pct_change`/`log_ratio` to
-`0.0` by convention. Temporal HRV and VAS are referenced against the baseline
-**trial's** whole-trial value; frequency HRV is referenced **per frequency**
-against the baseline window of the shared wavelet transform.
+`0.0` by convention. Temporal HRV, VAS, and GSR are referenced against the
+baseline **trial's** whole-trial value; frequency HRV is referenced **per
+frequency** against the baseline window of the shared wavelet transform.
 
 ## Per-file metrics
 
 ### `processed_ppg_results_temp.csv` — temporal HRV
-`Metric` ∈ `mean_HR`, `mean_RRI`, `RMSSD`, `SDNN`.
+
+Computed directly from the beat-to-beat (RR) interval series. These indicate
+**overall autonomic activity on the heart**, mixing sympathetic ("fight or
+flight") and parasympathetic/vagal ("rest and digest") influence — RMSSD in
+particular is the standard proxy for vagal/parasympathetic tone.
+
+| `Metric`   | Meaning |
+|------------|---------|
+| `mean_HR`  | Average heart rate (beats per minute) over the window. |
+| `mean_RRI` | Average time between heartbeats (ms) — the inverse of `mean_HR`. |
+| `RMSSD`    | Root-mean-square of successive beat-to-beat differences (ms) — short-term variability; higher generally reflects **more vagal/parasympathetic activity** (calmer state). |
+| `SDNN`     | Standard deviation of all beat intervals (ms) — overall HRV across the whole window, mixing both branches of the autonomic nervous system. |
+
 `sample_size` = `"<clean beats> / <raw beats>"` in the window.
 
 ### `processed_ppg_results_freq.csv` — frequency HRV
-`Metric` ∈ `VLF`, `LF`, `HF` (band power from a continuous wavelet transform;
-Task Force 1996 bands). `sample_size` = `"<clean beats> / <raw beats>"`.
+
+Band power from a continuous wavelet transform of the same RR-interval series
+(Task Force 1996 band definitions). These decompose HRV by oscillation speed,
+traditionally interpreted as separating slower sympathetic-linked rhythms from
+faster vagal/parasympathetic-linked rhythms — an interpretation the HRV
+literature treats as a useful heuristic rather than a strict law, since LF in
+particular is now known to reflect a mix of both branches.
+
+| `Metric` | Meaning |
+|----------|---------|
+| `VLF`    | Very-low-frequency power (0.003–0.04 Hz) — slow regulatory rhythms (e.g. thermoregulation, hormonal). |
+| `LF`     | Low-frequency power (0.04–0.15 Hz) — historically linked to sympathetic activity and baroreflex, but now considered a mixed sympathetic/vagal signal. |
+| `HF`     | High-frequency power (0.15–0.40 Hz) — tracks respiration-linked ("respiratory sinus arrhythmia") vagal/parasympathetic activity. |
+
+`sample_size` = `"<clean beats> / <raw beats>"`.
 
 ### `processed_vas_results.csv` — subjective stress (VAS)
-`Metric` ∈ `VAS_mean`, `VAS_median`, `VAS_std` of the VAS score.
+
+The participant's own **self-reported, moment-to-moment stress rating**
+(0–100 slider), independent of any physiological signal.
+
+| `Metric`     | Meaning |
+|--------------|---------|
+| `VAS_mean`   | Average self-reported stress level over the window. |
+| `VAS_median` | Median self-reported stress level — less sensitive to brief spikes than the mean. |
+| `VAS_std`    | Variability of self-reported stress within the window. |
+
 `sample_size` = number of touch samples in the window.
 
 **VAS score** = `position × 100` (0–100 scale). The VAS clock (`elapsed_s`,
@@ -131,3 +169,36 @@ zeroed to VAS-recording start) is shifted onto the Shimmer timeline via
 windows match the HRV windows exactly. The `touch_size`, `is_touching`, and
 `timestamp_us` columns of `touch_data` are not used. If a participant has no
 `touch_data`/marker, VAS is skipped (empty rows) without failing HRV.
+
+### `processed_gsr_results.csv` — tonic/phasic GSR/EDA
+
+Computed from the Shimmer `GSR` channel (skin resistance, kOhm → converted to
+conductance, µS) after artifact removal, then split into a slow **tonic**
+component and a fast **phasic** component (`gsr_method`, default `'highpass'`).
+Both reflect **sweat-gland activity driven by the sympathetic nervous system
+only** — unlike HRV, EDA has no parasympathetic/vagal contribution, so it's a
+comparatively unambiguous arousal signal.
+
+**Tonic (skin conductance level, SCL)** — the slow-moving background level,
+reflecting sustained/overall sympathetic arousal (e.g. general stress level
+during a block, independent of any single moment):
+
+| `Metric`          | Meaning |
+|-------------------|---------|
+| `Tonic_SCL_mean`   | Average background skin conductance (µS) over the window — higher means more sustained sympathetic arousal. |
+| `Tonic_SCL_slope`  | Linear trend of the background level over the window (µS/s) — rising = building arousal/sensitization, falling = habituation/recovery. |
+
+**Phasic (skin conductance responses, SCRs)** — brief spikes on top of the
+tonic level, each one a discrete sympathetic "startle"/arousal event, either
+triggered by a specific stimulus or occurring spontaneously:
+
+| `Metric`                    | Meaning |
+|-----------------------------|---------|
+| `Phasic_SCR_count`          | Number of distinct skin-conductance-response spikes detected in the window. |
+| `Phasic_SCR_rate`           | Same count, normalized to responses per minute — comparable across windows of different length. |
+| `Phasic_SCR_amplitude_mean` | Average size (µS) of the detected responses — how strong each arousal spike is, on average. |
+| `Phasic_SCR_amplitude_sum`  | Total size (µS) of all detected responses added together — combined intensity of arousal in the window. |
+| `Phasic_AUC`                | Area under the phasic curve (µS·s) over the window — a single combined measure of both how many responses occurred and how large they were. |
+
+`sample_size` = `"<clean samples> / <raw samples>"` in the window (same
+convention as temporal HRV, but counting GSR samples instead of heartbeats).

@@ -18,7 +18,12 @@ from lib.Metric_extraction.HRV_df import build_result_row
 from lib.Metric_extraction.VAS_extract import (
     get_vas_recording_offset, load_touch_vas, get_vas_metrics, bin_vas_30s,
 )
-from lib.config import OUTPUT_COLUMNS, group_from_participant
+from lib.GSR_extract.gsr_preprocess import (
+    preprocess_visualize_gsr, plot_preprocessing_steps_gsr, masked_sample_counts,
+)
+from lib.Metric_extraction.EDA_temp_extract import get_eda_metrics
+from lib.Metric_extraction.EDA_bin import bin_eda_30s
+from lib.config import OUTPUT_COLUMNS, group_from_participant, GSR_DECOMPOSITION_METHOD
 
 
 def _masked_count(beat_times, t_start, t_end):
@@ -29,7 +34,8 @@ def _masked_count(beat_times, t_start, t_end):
     return int(np.sum((t >= t_start) & (t <= t_end)))
 
 
-def full_process_single(participant_path, use_physio=True, use_stat=False, show=False, bin=30):
+def full_process_single(participant_path, use_physio=True, use_stat=False, show=False, bin=30,
+                         gsr_method=GSR_DECOMPOSITION_METHOD):
     """
     Process one participant's continuous PPG recording.
 
@@ -79,11 +85,21 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
     referenced the same way. Skipped (empty) if no touch_data / recording
     marker is present.
 
+    CAL_gsr collects tonic/phasic EDA rows (Tonic_SCL_mean, Tonic_SCL_slope,
+    Phasic_SCR_count, Phasic_SCR_rate, Phasic_SCR_amplitude_mean,
+    Phasic_SCR_amplitude_sum, Phasic_AUC) from the shimmer GSR channel already
+    loaded in df_ppg. Preprocessing (unit conversion, artifact removal,
+    tonic/phasic decomposition, SCR peak detection) runs ONCE on the whole
+    recording via preprocess_visualize_gsr, same "compute once, window per
+    trial" pattern as the RRI/CWT/VAS blocks above. Binned/baseline-referenced
+    over the SAME task windows / 30-s bins as CAL_temp.
+
     Returns:
         participant_id (str)         : Participant identifier (e.g. "SBSA_02").
         df_temp        (pd.DataFrame): Temporal HRV rows, schema = OUTPUT_COLUMNS.
         df_freq        (pd.DataFrame): Frequency HRV rows, schema = OUTPUT_COLUMNS.
         df_vas         (pd.DataFrame): VAS rows, schema = OUTPUT_COLUMNS.
+        df_gsr         (pd.DataFrame): Tonic/phasic EDA rows, schema = OUTPUT_COLUMNS.
     """
     participant_path = Path(participant_path)
     print(f"\nParticipant folder : {participant_path.name}")
@@ -91,9 +107,11 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
     CAL_temp              = []
     CAL_freq              = []
     CAL_vas               = []
+    CAL_gsr               = []
     baseline_temp_raw     = None
     baseline_per_freq_raw = None
     baseline_vas_raw      = None
+    baseline_gsr_raw      = None
     participant_id        = None
 
     try:
@@ -172,6 +190,18 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         df_touch   = load_touch_vas(participant_path, vas_offset)
         if df_touch is None:
             print("  No VAS/touch data — VAS extraction skipped for this participant")
+
+        # ── 5c. GSR/EDA (electrodermal activity) — preprocess once ──────────
+        # df_ppg['GSR'] is the raw Shimmer skin-resistance channel (kOhm),
+        # already loaded/resampled alongside PPG by load_and_clean_ppg above.
+        print("\n  Preprocessing GSR/EDA for full recording...")
+        results_gsr = preprocess_visualize_gsr(
+            df_ppg['time_seconds'].values, df_ppg['GSR'].values, fs,
+            method=gsr_method, verbose=True,
+        )
+        if show:
+            plot_preprocessing_steps_gsr(results_gsr, participant_id=participant_id,
+                                          df_events=df_events, show=show)
 
         # ── 6. Per-trial loop: masking / labeling / binning only ────────────
         for trial in trials:
@@ -321,6 +351,43 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                         f"{k}={v:.2f}" for k, v in vas_metrics.items()
                     ))
 
+                # ── 6d. GSR/EDA (tonic/phasic) ──────────────────────────────
+                # Same task window / 30-s bins / baseline reference as the
+                # temporal HRV metrics above; results_gsr was computed once,
+                # before the per-trial loop.
+                metrics_gsr = get_eda_metrics(results_gsr, t_start=task_window[0], t_end=task_window[1])
+                gsr_n_clean, gsr_n_raw = masked_sample_counts(results_gsr, *task_window)
+                gsr_sample_size = f"{gsr_n_clean} / {gsr_n_raw}"
+                if condition == 'baseline':
+                    baseline_gsr_raw = metrics_gsr
+
+                for metric_name, metric_value in metrics_gsr.items():
+                    bl = (baseline_gsr_raw or {}).get(metric_name, float('nan'))
+                    CAL_gsr.extend(build_result_row(
+                        participant_id=participant_id,
+                        trial=trial,
+                        condition=condition,
+                        time_interval_rel_start=0.0,
+                        time_interval_abs_start=task_window[0],
+                        time_interval_rel_end=task_window[1] - task_window[0],
+                        time_interval_abs_end=task_window[1],
+                        task_moment=total_task_moment, recording_type='total',
+                        metric_name=metric_name, metric_value=metric_value,
+                        baseline_mean=bl, sample_size=gsr_sample_size,
+                    ))
+
+                # 30-s binned GSR/EDA — block trials only (baseline kept whole)
+                if condition != 'baseline':
+                    gsr_binned = bin_eda_30s(
+                        results_gsr, trial, condition, task_window, df_events_t,
+                        participant_id, baseline_gsr_raw or {}, bin_width=bin,
+                    )
+                    CAL_gsr.extend(gsr_binned.to_dict('records'))
+
+                print("  GSR total: " + "  ".join(
+                    f"{k}={v:.4f}" for k, v in metrics_gsr.items()
+                ))
+
             except Exception as trial_err:
                 import traceback
                 print(f"\n  ERROR processing trial {trial}: {trial_err}")
@@ -332,16 +399,18 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                 CAL_temp.append(failed_row)
                 CAL_freq.append(failed_row)
                 CAL_vas.append(failed_row)
+                CAL_gsr.append(failed_row)
 
-        # Output dataframes for HRV temp/freq and VAS metrics
+        # Output dataframes for HRV temp/freq, VAS, and GSR/EDA metrics
         df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_vas  = pd.DataFrame(CAL_vas,  columns=OUTPUT_COLUMNS) if CAL_vas  else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        df_gsr  = pd.DataFrame(CAL_gsr,  columns=OUTPUT_COLUMNS) if CAL_gsr  else pd.DataFrame(columns=OUTPUT_COLUMNS)
 
         # Study-group tag (HC = SBSA controls, T = SBAA tinnitus), placed
         # right after the participant column.
         groupe = group_from_participant(participant_id)
-        for _df in (df_temp, df_freq, df_vas):
+        for _df in (df_temp, df_freq, df_vas, df_gsr):
             _df.insert(1, 'groupe', groupe)
 
         print(f"\n{'=' * 55}")
@@ -349,9 +418,10 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         print(f"  CAL_temp rows : {len(df_temp)}")
         print(f"  CAL_freq rows : {len(df_freq)}")
         print(f"  CAL_vas  rows : {len(df_vas)}")
+        print(f"  CAL_gsr  rows : {len(df_gsr)}")
         print(f"{'=' * 55}")
 
-        return participant_id, df_temp, df_freq, df_vas
+        return participant_id, df_temp, df_freq, df_vas, df_gsr
 
     except Exception as e:
         import traceback
@@ -360,7 +430,8 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         df_temp = pd.DataFrame(CAL_temp, columns=OUTPUT_COLUMNS) if CAL_temp else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_freq = pd.DataFrame(CAL_freq, columns=OUTPUT_COLUMNS) if CAL_freq else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_vas  = pd.DataFrame(CAL_vas,  columns=OUTPUT_COLUMNS) if CAL_vas  else pd.DataFrame(columns=OUTPUT_COLUMNS)
+        df_gsr  = pd.DataFrame(CAL_gsr,  columns=OUTPUT_COLUMNS) if CAL_gsr  else pd.DataFrame(columns=OUTPUT_COLUMNS)
         groupe = group_from_participant(participant_id)
-        for _df in (df_temp, df_freq, df_vas):
+        for _df in (df_temp, df_freq, df_vas, df_gsr):
             _df.insert(1, 'groupe', groupe)
-        return participant_id, df_temp, df_freq, df_vas
+        return participant_id, df_temp, df_freq, df_vas, df_gsr
