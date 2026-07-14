@@ -265,6 +265,6 @@ def plot_preprocessing_steps_gsr(results, participant_id=None, df_events=None, s
 
     if show:
         plt.show()
-        plt.close(fig)
+        #plt.close(fig)
 
     return fig
