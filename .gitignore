@@ -23,6 +23,7 @@ __pycache__/
 
 # Generated results/figures
 Results/
+Plots/
 
 # Scratch files
 testspace.py
