@@ -233,6 +233,13 @@ def load_and_clean_ppg(participants_path, trial_filter=None, show=False):
 
     # Bad segments & resampling
     badsegments             = find_bad_segments(df_ppg)
+
+    # Native GSR sampling rate from the raw (pre-resample) Shimmer timestamps.
+    # GSR shares the device clock with PPG, so this is the true rate at which
+    # the GSR channel was acquired before resampling to the 250 Hz grid below.
+    fs_gsr_native = 1000.0 / np.median(np.diff(df_ppg["Time Stamp"].astype(float).values))
+    print(f"  Native GSR sampling rate: {fs_gsr_native:.3f} Hz")
+
     df_ppg, fs, badsegments = resample_signal(df_ppg, badsegments, fs_new=250)
 
     # Replace interpolated values with exact regular-grid times

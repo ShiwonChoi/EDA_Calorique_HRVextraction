@@ -19,7 +19,7 @@ from lib.Metric_extraction.EDA_temp_extract import get_eda_metrics
 from lib.Metric_extraction.EDA_bin import bin_eda_30s
 from lib.config import OUTPUT_COLUMNS, GSR_DECOMPOSITION_METHOD
 
-def full_process_single(participant_path, use_physio=True, use_stat=False, show=False, bin=30,
+def full_process_single(participant_path, use_physio=True, use_stat=False, show=True, bin=30,
                          gsr_method=GSR_DECOMPOSITION_METHOD):
     """
     Process one participant's PPG data on a per-trial basis.
