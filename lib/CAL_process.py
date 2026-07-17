@@ -19,7 +19,7 @@ from lib.Metric_extraction.EDA_temp_extract import get_eda_metrics
 from lib.Metric_extraction.EDA_bin import bin_eda_30s
 from lib.config import OUTPUT_COLUMNS, GSR_DECOMPOSITION_METHOD
 
-def full_process_single(participant_path, use_physio=True, use_stat=False, show=True, bin=30,
+def full_process_single(participant_path, use_physio=True, use_stat=False, use_low_pass_stat=True, show=True, bin=30,
                          gsr_method=GSR_DECOMPOSITION_METHOD):
     """
     Process one participant's PPG data on a per-trial basis.
@@ -130,7 +130,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
 
             # Resampling : Artifact detection, removal and interpolation
             # -------------------------------------------------------------------------------------------
-            results = preprocess_visualize(beat_times, rri_values, use_physio=use_physio, use_stat=use_stat)
+            results = preprocess_visualize(beat_times, rri_values, use_physio=use_physio, use_stat=use_stat, use_low_pass_stat=use_low_pass_stat)
 
             # sample_size: clean / after-artifact-removal of corrected-CSV-total-before-filtering
             sample_size = f"{len(results['intervals_clean'])} / {len(results['intervals_raw'])}" #of {base_rri}"

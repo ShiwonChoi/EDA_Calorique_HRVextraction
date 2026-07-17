@@ -170,6 +170,7 @@ def plot_total_metric_boxplot_by_trial(
     metric,
     value_type="raw",
     trial_col="trial",
+    group_col="condition",
     ax=None,
     box_color="#4c78a8",
     save_path=None,
@@ -181,8 +182,10 @@ def plot_total_metric_boxplot_by_trial(
 
     Same filtering as :func:`plot_total_metric_boxplot` — 'total' rows for the
     requested ``metric`` and ``value_type`` — but the condition/group split is
-    ignored, so each trial is a single distribution over every participant and
-    condition in that trial.
+    ignored for the box itself, so each trial is a single distribution over
+    every participant and condition in that trial. The overlaid individual
+    points, however, are coloured by ``group_col`` (via ``CONDITION_COLORS``)
+    so participants' conditions remain visible.
 
     Parameters
     ----------
@@ -195,6 +198,9 @@ def plot_total_metric_boxplot_by_trial(
         'log_ratio'.
     trial_col : str, default 'trial'
         Column whose levels become the x-axis boxes.
+    group_col : str, default 'condition'
+        Column used to colour the individual point overlay via
+        ``CONDITION_COLORS``. Does not affect box grouping.
     ax : matplotlib.axes.Axes, optional
         Axis to draw on. A new figure/axis is created when omitted.
     box_color : str, default '#4c78a8'
@@ -236,14 +242,16 @@ def plot_total_metric_boxplot_by_trial(
         fig = ax.figure
         created_fig = False
 
-    data, positions, kept_trials = [], [], []
+    data, positions, kept_trials, groups_per_trial = [], [], [], []
     for ti, trial in enumerate(trials):
-        vals = sub.loc[sub[trial_col] == trial, "Value"].values
+        trial_rows = sub.loc[sub[trial_col] == trial]
+        vals = trial_rows["Value"].values
         if len(vals) == 0:
             continue
         data.append(vals)
         positions.append(ti)
         kept_trials.append(trial)
+        groups_per_trial.append(trial_rows[group_col].values)
 
     ax.boxplot(
         data,
@@ -257,15 +265,28 @@ def plot_total_metric_boxplot_by_trial(
         boxprops=dict(facecolor=box_color, edgecolor=box_color, alpha=0.55),
     )
 
-    # Overlay individual participant points for transparency.
-    for vals, pos in zip(data, positions):
+    # Overlay individual participant points, coloured by condition/group for
+    # transparency into the pooled box.
+    legend_handles = {}
+    for vals, pos, point_groups in zip(data, positions, groups_per_trial):
         jitter = (pd.Series(range(len(vals))) - (len(vals) - 1) / 2)
         jitter = jitter * 0.03
+        point_colors = [
+            CONDITION_COLORS.get(g, _FALLBACK_COLOR) for g in point_groups
+        ]
         ax.scatter(
             pos + jitter.values, vals,
-            s=16, color=box_color, edgecolor="white", linewidth=0.4,
+            s=16, color=point_colors, edgecolor="white", linewidth=0.4,
             zorder=3,
         )
+        for g in pd.unique(point_groups):
+            legend_handles.setdefault(
+                g, plt.Line2D(
+                    [], [], marker="o", linestyle="",
+                    markerfacecolor=CONDITION_COLORS.get(g, _FALLBACK_COLOR),
+                    markeredgecolor="white", markersize=6,
+                )
+            )
 
     ax.set_xticks(range(len(kept_trials)))
     ax.set_xticklabels(kept_trials)
@@ -273,6 +294,12 @@ def plot_total_metric_boxplot_by_trial(
     ax.set_ylabel(f"{metric} ({value_type})")
     ax.set_title(f"{metric} — whole-task value per {trial_col} (all conditions)")
     ax.grid(axis="y", linestyle=":", alpha=0.5)
+    if legend_handles:
+        ax.legend(
+            legend_handles.values(), legend_handles.keys(),
+            title=group_col, frameon=False,
+            loc="upper left", bbox_to_anchor=(1.01, 1.0),
+        )
     if created_fig:
         fig.tight_layout()
 

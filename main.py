@@ -46,7 +46,7 @@ def batch_process_all(participants_dir=DATA_DIR):
         try:
             _, df_temp, df_freq, df_gsr = full_process_single(p_path,
                                                       use_physio=True, use_stat=False,
-                                                      show=False,
+                                                      show=True,
                                                       bin=30)
 
             if df_temp.empty and df_freq.empty:

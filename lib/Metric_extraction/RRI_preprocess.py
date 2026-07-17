@@ -23,15 +23,20 @@ def detect_artifacts(
     intervals: np.ndarray,
     use_physio: bool = True,
     use_stat: bool = False,
+    low_pass_stat: bool = True,
     min_interval: float = 300,
     max_interval: float = 2000,
     local_outlier_threshold: float = 3.0) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Optionally applies up to two independent artifact criteria:
+    Optionally applies up to three independent artifact criteria:
 
     1. Physiological bounds (use_physio): flag intervals outside [min_interval, max_interval].
     2. Statistical / local MAD (use_stat): flag intervals deviating > local_outlier_threshold
-       * MAD from a rolling median (window = 5% of signal, min 5 beats).
+       * MAD from a rolling median (window = 5% of signal, min 5 beats), i.e. rejects
+       intervals below (rolling_median - threshold*MAD) or above (rolling_median + threshold*MAD).
+    3. Low-pass statistical (low_pass_stat): one-sided version of criterion 2 — only rejects
+       intervals above (rolling_median + threshold*MAD); intervals below the lower bound are
+       kept.
 
     Returns
     -------
@@ -46,15 +51,24 @@ def detect_artifacts(
         artifact_mask |= (intervals < min_interval) | (intervals > max_interval)
         print(f"    Physio filter (300–2000 ms): {artifact_mask.sum()} artifacts flagged")
 
-    if use_stat:
+    if use_stat or low_pass_stat:
         window_size = max(5, int(len(intervals) * 0.05))
         s = pd.Series(intervals)
         rolling_median = s.rolling(window_size, center=True, min_periods=1).median().values
         mad = np.median(np.abs(intervals - rolling_median))
-        stat_mask = np.abs(intervals - rolling_median) > local_outlier_threshold * mad
-        n_new = int((stat_mask & ~artifact_mask).sum())
-        artifact_mask |= stat_mask
-        print(f"    MAD filter (threshold={local_outlier_threshold}): {n_new} additional artifacts flagged")
+        deviation = intervals - rolling_median
+
+        if use_stat:
+            stat_mask = np.abs(deviation) > local_outlier_threshold * mad
+            n_new = int((stat_mask & ~artifact_mask).sum())
+            artifact_mask |= stat_mask
+            print(f"    MAD filter (threshold={local_outlier_threshold}): {n_new} additional artifacts flagged")
+
+        if low_pass_stat:
+            low_pass_mask = deviation > local_outlier_threshold * mad
+            n_new = int((low_pass_mask & ~artifact_mask).sum())
+            artifact_mask |= low_pass_mask
+            print(f"    Low-pass MAD filter (threshold={local_outlier_threshold}, upper bound only): {n_new} additional artifacts flagged")
 
     artifact_indices = np.where(artifact_mask)[0]
     return artifact_mask, artifact_indices
@@ -327,6 +341,7 @@ def preprocess_visualize(
     intervals: np.ndarray,
     use_physio: bool = True,
     use_stat: bool = False,
+    use_low_pass_stat: bool = True,
     remove_artifacts_method: str = 'remove',
     detrend_method: str = 'polynomial',
     detrend_order: int = 1,
@@ -370,9 +385,9 @@ def preprocess_visualize(
     # -------------------------------------------------------------------------
     # Step 1: Detect and remove artifacts
     # -------------------------------------------------------------------------
-    artifact_mask, artifact_indices = detect_artifacts(intervals_raw, use_physio=use_physio, use_stat=use_stat)
+    artifact_mask, artifact_indices = detect_artifacts(intervals_raw, use_physio=use_physio, use_stat=use_stat, low_pass_stat=use_low_pass_stat)
     n_artifacts = np.sum(artifact_mask)
-    
+
     if verbose:
         print(f"    Artifacts detected: {n_artifacts} ({100*n_artifacts/len(intervals_raw):.1f}%)")
     

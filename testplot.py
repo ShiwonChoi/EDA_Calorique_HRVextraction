@@ -7,9 +7,12 @@ and split by condition.
 """
 
 from lib.config import output_dir
-from lib.Plots.metric_boxplots import (
+from lib.Plots_func.metric_boxplots import (
     plot_total_metric_boxplot,
     plot_total_metric_boxplot_by_trial,
+)
+from lib.Plots_func.interval_plots import (
+    plot_intervals_by trial
 )
 
 # --- Pick which result file / metric / value type to plot ------------------
@@ -18,8 +21,8 @@ from lib.Plots.metric_boxplots import (
 #   temp : mean_HR, mean_RRI, RMSSD, SDNN
 #   freq : VLF, LF, HF
 #   gsr  : Tonic_SCL_mean, Tonic_SCL_slope, Phasic_AUC, Phasic_SCR_count, ...
-CSV_PATH   = output_dir / "processed_ppg_results_gsr.csv"
-METRIC     = "Tonic_SCL_mean"
+CSV_PATH   = output_dir / "processed_ppg_results_temp.csv"
+METRIC     = "mean_HR"
 VALUE_TYPE = "raw"        # 'raw' | 'diff' | 'pct_change' | 'log_ratio'
 
 
@@ -36,3 +39,6 @@ if __name__ == "__main__":
     # plot_total_metric_boxplot(
     #     csv_path=CSV_PATH, metric=METRIC, value_type=VALUE_TYPE, show=True,
     # )
+
+# TODO plot interval measure
+# TODO autocorrelation
