@@ -147,7 +147,7 @@ def get_participant_paths(root=PARTICIPANTS_DIR, patterns=("SBSA_*", "SBAA_*")):
 # Study-group codes keyed by folder prefix.
 GROUP_MAP = {
     "SBSA": "HC",   # healthy controls
-    "SBAA": "T",    # tinnitus (acouphène)
+    "SBA": "T",    # tinnitus (acouphène)
 }
 
 
