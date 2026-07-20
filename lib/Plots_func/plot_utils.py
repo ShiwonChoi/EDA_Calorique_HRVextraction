@@ -91,6 +91,44 @@ def filter_interval_data(df, metric, value_type, require_success=True,
     return d.dropna(subset=[COL_VALUE, COL_REL_START])
 
 
+def filter_baseline_data(df, metric, value_type, require_success=True):
+    """Return the baseline rows for a single metric and value_type, cleaned.
+
+    The baseline trial has no 30 s interval breakdown -- it is stored as a
+    single ``recording_type == 'total'`` summary per participant spanning the
+    whole baseline recording (``task_moment == 'baseline'``). This helper is the
+    baseline counterpart to `filter_interval_data`: it keeps exactly those rows
+    so a single mean +/- band per group can be drawn as a flat reference against
+    the interval-based recovery curves.
+
+    All ``time_interval_rel_start`` values are 0 here, so passing the result
+    through `compute_mean_and_band` collapses to one row (one point per group).
+
+    Parameters
+    ----------
+    df : DataFrame        -- a loaded results CSV (long format).
+    metric : str          -- value of the `Metric` column.
+    value_type : str      -- value of the `Value_type` column ('raw', 'diff',
+                            'pct_change', 'log_ratio').
+    require_success : bool -- if True and a `status` column exists, keep only
+                            rows with status == 'SUCCESS'.
+
+    Returns a filtered copy (may be empty).
+    """
+    d = df[(df[COL_MOMENT] == 'baseline') &
+           (df[COL_RECTYPE] == 'total') &
+           (df[COL_METRIC] == metric) &
+           (df[COL_VTYPE] == value_type)].copy()
+
+    if require_success and 'status' in d.columns:
+        d = d[d['status'] == 'SUCCESS']
+
+    d[COL_VALUE] = pd.to_numeric(d[COL_VALUE], errors='coerce')
+    d[COL_REL_START] = pd.to_numeric(d[COL_REL_START], errors='coerce')
+
+    return d.dropna(subset=[COL_VALUE, COL_REL_START])
+
+
 # ==========================================================================
 # AGGREGATION
 # ==========================================================================

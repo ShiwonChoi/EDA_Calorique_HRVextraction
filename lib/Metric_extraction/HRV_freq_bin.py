@@ -81,12 +81,15 @@ def _empty_output():
 
 
 def bin_totalbandpower(bandpower, trial, condition, task_interval,
-                       participant_id, sample_size):
+                       participant_id, sample_size, task_moment=None):
     """
-    Mean band power over the entire task window — one row per (band, value_type).
+    Mean band power over a whole-phase window — one row per (band, value_type).
     recording_type = 'total'.
-    task_moment    = 'baseline' for the baseline trial, 'total' for stim trials.
-    rel_start = 0, abs_start = task_start; rel_end = task duration, abs_end = task_end.
+
+    task_moment names the phase this total covers (e.g. 'task' / 'recovery' for
+    block trials, 'baseline' for the baseline trial). When not given it falls
+    back to 'baseline' for the baseline trial, else 'total'.
+    rel_start = 0, abs_start = task_start; rel_end = window duration, abs_end = task_end.
     """
     task_start, task_end = task_interval
 
@@ -94,7 +97,8 @@ def bin_totalbandpower(bandpower, trial, condition, task_interval,
         print(f"  No {trial} task window — emitting no {trial}_total rows")
         return _empty_output()
 
-    task_moment = 'baseline' if condition == 'baseline' else 'total'
+    if task_moment is None:
+        task_moment = 'baseline' if condition == 'baseline' else 'total'
     task_duration = task_end - task_start
 
     print(f"Extracting {trial}_total metrics from {task_start:.2f} to {task_end:.2f}s")

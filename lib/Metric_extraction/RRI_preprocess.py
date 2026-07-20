@@ -332,6 +332,7 @@ def preprocess_visualize(
     detrend_order: int = 1,
     resample_rate: float = 4.0,
     highpass_cutoff: float = 0.035,
+    filter_pad_seconds: float = 120.0,
     verbose: bool = True
 ) -> dict:
     """
@@ -340,8 +341,10 @@ def preprocess_visualize(
     Applies standard sequence:
     1. Artifact detection and removal
     2. Resampling to uniform rate
-    3. High-pass filtering (detrending)
-    
+    3. High-pass filtering (detrending), reflection-padded filter_pad_seconds
+       per side to keep the filter settling transient off the true recording
+       boundaries (only intervals_filtered / the frequency path is affected).
+
     Returns
     -------
     results : dict
@@ -402,11 +405,29 @@ def preprocess_visualize(
     # -------------------------------------------------------------------------
     # Step 3: High-pass filter (detrending)
     # -------------------------------------------------------------------------
+    # Reflection-pad both ends before filtering so the Butterworth settling
+    # transient falls in the (discarded) pad, not at the true recording
+    # boundaries. filtfilt's own default padding is only ~3*max(len(a),len(b))
+    # samples (~15 samples / ~4 s at 4 Hz) — far too short for a 0.035 Hz
+    # high-pass. Matches the reflection padding compute_cwt_power applies before
+    # the wavelet convolution, so the boundaries are clean end-to-end
+    # (filter -> CWT). The pad is trimmed off, so intervals_filtered keeps the
+    # same length/time axis as intervals_resampled and t_resampled — only the
+    # frequency path uses intervals_filtered; temporal metrics use
+    # intervals_clean and are unaffected.
     b, a = butter(4, highpass_cutoff / (resample_rate / 2), btype="high")
-    intervals_filtered = filtfilt(b, a, intervals_resampled)
-    
+
+    pad_n = int(filter_pad_seconds * resample_rate)
+    pad_n = min(pad_n, len(intervals_resampled) - 1) if len(intervals_resampled) > 1 else 0
+    if pad_n > 0:
+        padded             = np.pad(intervals_resampled, pad_n, mode='reflect')
+        intervals_filtered = filtfilt(b, a, padded)[pad_n:-pad_n]
+    else:
+        intervals_filtered = filtfilt(b, a, intervals_resampled)
+
     if verbose:
-        print(f"    High-pass filtered at {highpass_cutoff} Hz")
+        print(f"    High-pass filtered at {highpass_cutoff} Hz "
+              f"(reflection-padded {pad_n / resample_rate:.0f}s/side)")
     
     # -------------------------------------------------------------------------
     # Return all intermediate results

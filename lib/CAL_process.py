@@ -3,12 +3,13 @@ import numpy as np
 from pathlib import Path
 import matplotlib.pyplot as plt
 from lib.PPG_extract.load_and_clean_ppg import load_and_clean_ppg
+from lib.PPG_extract.ppg_preprocess import experiment_window
 from lib.PPG_extract.manual_peak import (
     load_corrected_rri_for_participant, detect_peaks_full, place_corrected_peaks,
     extract_beats, plot_corr_peaks,
 )
 from lib.Metric_extraction.RRI_preprocess import preprocess_pipeline, preprocess_visualize, plot_preprocessing_steps, validate_intervals
-from lib.Metric_extraction.HRV_temp_extract import get_temp_metrics
+from lib.Metric_extraction.HRV_temp_extract import get_temp_metrics, total_windows
 from lib.Metric_extraction.HRV_temp_bin import bin_temp_30s
 from lib.Metric_extraction.HRV_freq_extract import (
     run_cwt_compute, run_cwt_task, extract_band_power_cwt, band_results_to_df, plot_cwt_scalogram,
@@ -32,6 +33,13 @@ def _masked_count(beat_times, t_start, t_end):
     if t.size == 0:
         return 0
     return int(np.sum((t >= t_start) & (t <= t_end)))
+
+
+def _beat_sample_size(results, t_start, t_end):
+    """'<n_clean> / <n_raw>' beat counts inside [t_start, t_end] for one window."""
+    n_clean = _masked_count(results['beat_times_clean'], t_start, t_end)
+    n_raw   = _masked_count(results['beat_times_raw'],   t_start, t_end)
+    return f"{n_clean} / {n_raw}"
 
 
 def full_process_single(participant_path, use_physio=True, use_stat=False, show=False, bin=30,
@@ -69,12 +77,21 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         Metric, Value_type, Value,
         sample_size ("<n_clean> of <n_raw>"), status, error
 
+    'total' rows now cover a whole PHASE rather than the whole trial (see
+    total_windows in HRV_temp_extract.py):
+        - baseline trial: one 'total' spanning its whole recording
+          (task_moment='baseline') — the reference every other trial is
+          corrected against.
+        - block trials: a 'task' total over the sound-play phase padded ±60 s
+          (task_moment='task') and a 'recovery' total over the whole rest phase
+          (task_moment='recovery'). The old single whole-trial 'total' is gone.
+
     CAL_temp collects temporal HRV rows (mean_HR, mean_RRI, RMSSD, SDNN):
-        - 'total' rows: whole-trial metric, baseline-referenced against trial 0.
+        - 'total' rows: per-phase metric, baseline-referenced against trial 0.
         - 'interval' rows (block trials only): 30-s bins, same baseline reference.
 
     CAL_freq collects frequency HRV rows (VLF, LF, HF band power):
-        - 'total' rows: whole-trial mean per band, all trials.
+        - 'total' rows: per-phase mean per band, all trials.
         - 'interval' rows (block trials only): 30-s bin means.
         Baseline rows carry diff/pct_change/log_ratio = 0.0 by convention;
         other rows are corrected per-frequency against trial 0.
@@ -127,6 +144,21 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
             participant_path, participant_id, use_physio=use_physio, use_stat=use_stat,
         )
         signal = place_corrected_peaks(signal, df_ppg, df_corr, use_physio=use_physio, use_stat=use_stat)
+
+        # ── 3b. Crop to the experiment window, ONCE, before any preprocessing ─
+        exp_window = experiment_window(df_events)
+        if exp_window is not None:
+            t_exp0, t_exp1 = exp_window
+            ts_full  = df_ppg["time_seconds"].values
+            keep     = (ts_full >= t_exp0) & (ts_full <= t_exp1)
+            n_before = len(df_ppg)
+            df_ppg   = df_ppg[keep]
+            signal   = signal[keep].reset_index(drop=True)
+            print(f"  Cropped to experiment window [{t_exp0:.1f}s – {t_exp1:.1f}s]: "
+                  f"{int(keep.sum())}/{n_before} samples kept "
+                  f"({n_before - int(keep.sum())} pre/post-experiment samples dropped)")
+        else:
+            print("  No event times found — skipping experiment-window crop")
 
         # Attach time/metadata so `signal` is self-contained
         signal["time_seconds"]      = df_ppg["time_seconds"].values
@@ -190,6 +222,12 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         df_touch   = load_touch_vas(participant_path, vas_offset)
         if df_touch is None:
             print("  No VAS/touch data — VAS extraction skipped for this participant")
+        elif exp_window is not None:
+            # Crop VAS to the SAME experiment window as the physiological signals.
+            vas_keep     = (df_touch["time_seconds"] >= t_exp0) & (df_touch["time_seconds"] <= t_exp1)
+            n_before_vas = len(df_touch)
+            df_touch     = df_touch[vas_keep].reset_index(drop=True)
+            print(f"  VAS cropped to experiment window: {len(df_touch)}/{n_before_vas} samples kept")
 
         # ── 5c. GSR/EDA (electrodermal activity) — preprocess once ──────────
         # df_ppg['GSR'] is the raw Shimmer skin-resistance channel (kOhm),
@@ -217,36 +255,39 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                 ev_times_s  = df_events_t['time_since_connected_ms'].values / 1000
                 task_window = (float(ev_times_s[0]), float(ev_times_s[-1]))
 
-                n_clean = _masked_count(results['beat_times_clean'], *task_window)
-                n_raw   = _masked_count(results['beat_times_raw'],   *task_window)
-                sample_size = f"{n_clean} / {n_raw}"
+                sample_size = _beat_sample_size(results, *task_window)
 
-                # task_moment for whole-trial (total) rows
-                total_task_moment = 'baseline' if condition == 'baseline' else 'total'
+                # Whole-phase 'total' windows for this trial: the baseline trial
+                # keeps one ('baseline', whole-window) total; block trials get a
+                # ('task', task±60s) and a ('recovery', whole-rest) total. The
+                # per-trial 30-s 'interval' bins below are unchanged.
+                tot_windows = total_windows(condition, task_window, df_events_t)
 
-                # -- 6a. Temporal ---------------------------------------------------------------
-                metrics_temp = get_temp_metrics(
-                    results['intervals_clean'], results['beat_times_clean'],
-                    t_start=task_window[0], t_end=task_window[1],
-                )
-                if condition == 'baseline':
-                    baseline_temp_raw = metrics_temp
+                # -- 6a. Temporal (whole-phase totals) ------------------------------------------
+                for moment, (w_start, w_end) in tot_windows:
+                    win_metrics = get_temp_metrics(
+                        results['intervals_clean'], results['beat_times_clean'],
+                        t_start=w_start, t_end=w_end,
+                    )
+                    if moment == 'baseline':
+                        baseline_temp_raw = win_metrics
+                    win_ss = _beat_sample_size(results, w_start, w_end)
 
-                for metric_name, metric_value in metrics_temp.items():
-                    bl = (baseline_temp_raw or {}).get(metric_name, float('nan'))
-                    CAL_temp.extend(build_result_row(
-                        participant_id=participant_id,
-                        trial=trial,
-                        condition=condition,
-                        time_interval_rel_start=0.0,
-                        time_interval_abs_start=task_window[0],
-                        time_interval_rel_end=task_window[1] - task_window[0],
-                        time_interval_abs_end=task_window[1],
-                        task_moment=total_task_moment, recording_type='total',
-                        metric_name=metric_name, metric_value=metric_value,
-                        baseline_mean=bl, sample_size=sample_size,
-                    ))
-                print(f"\n  Temporal: {metrics_temp}")
+                    for metric_name, metric_value in win_metrics.items():
+                        bl = (baseline_temp_raw or {}).get(metric_name, float('nan'))
+                        CAL_temp.extend(build_result_row(
+                            participant_id=participant_id,
+                            trial=trial,
+                            condition=condition,
+                            time_interval_rel_start=0.0,
+                            time_interval_abs_start=w_start,
+                            time_interval_rel_end=w_end - w_start,
+                            time_interval_abs_end=w_end,
+                            task_moment=moment, recording_type='total',
+                            metric_name=metric_name, metric_value=metric_value,
+                            baseline_mean=bl, sample_size=win_ss,
+                        ))
+                    print(f"  Temporal [{moment}] {w_start:.1f}-{w_end:.1f}s: {win_metrics}")
 
                 # 30-s binned temporal metrics — block trials only (baseline kept whole)
                 if condition != 'baseline':
@@ -283,13 +324,20 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                     )
                     band_df = task_out['band_df']
 
-                # Whole-trial mean per (band, value_type)
-                total = bin_totalbandpower(
-                    bandpower=band_df, trial=trial, condition=condition,
-                    task_interval=task_window, participant_id=participant_id,
-                    sample_size=sample_size,
-                )
-                CAL_freq.extend(total.to_dict('records'))
+                # Whole-phase mean per (band, value_type) — one total per
+                # task/recovery window (baseline: one whole-window total).
+                for moment, (w_start, w_end) in tot_windows:
+                    total = bin_totalbandpower(
+                        bandpower=band_df, trial=trial, condition=condition,
+                        task_interval=(w_start, w_end), participant_id=participant_id,
+                        sample_size=_beat_sample_size(results, w_start, w_end),
+                        task_moment=moment,
+                    )
+                    CAL_freq.extend(total.to_dict('records'))
+                    print(f"  Freq total [{moment}]: " + "  ".join(
+                        f"{r['Metric']}.{r['Value_type']}={r['Value']:.4f}"
+                        for r in total.to_dict('records')
+                    ))
 
                 # 30-s binned bandpower — stim trials only (baseline kept whole)
                 if condition != 'baseline':
@@ -311,32 +359,31 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                         show=show,
                     )
 
-                print("  Freq total: " + "  ".join(
-                    f"{r['Metric']}.{r['Value_type']}={r['Value']:.4f}"
-                    for r in total.to_dict('records')
-                ))
-
                 # ── 6c. VAS (subjective stress) ────────────────────────────
                 # Same task window / 30-s bins / baseline reference as the
                 # temporal HRV metrics above.
                 if df_touch is not None:
-                    vas_metrics, vas_n = get_vas_metrics(df_touch, task_window[0], task_window[1])
-                    if condition == 'baseline':
-                        baseline_vas_raw = vas_metrics
+                    for moment, (w_start, w_end) in tot_windows:
+                        vas_metrics, vas_n = get_vas_metrics(df_touch, w_start, w_end)
+                        if moment == 'baseline':
+                            baseline_vas_raw = vas_metrics
 
-                    for metric_name, metric_value in vas_metrics.items():
-                        bl = (baseline_vas_raw or {}).get(metric_name, float('nan'))
-                        CAL_vas.extend(build_result_row(
-                            participant_id=participant_id,
-                            trial=trial,
-                            condition=condition,
-                            time_interval_rel_start=0.0,
-                            time_interval_abs_start=task_window[0],
-                            time_interval_rel_end=task_window[1] - task_window[0],
-                            time_interval_abs_end=task_window[1],
-                            task_moment=total_task_moment, recording_type='total',
-                            metric_name=metric_name, metric_value=metric_value,
-                            baseline_mean=bl, sample_size=f"{vas_n}",
+                        for metric_name, metric_value in vas_metrics.items():
+                            bl = (baseline_vas_raw or {}).get(metric_name, float('nan'))
+                            CAL_vas.extend(build_result_row(
+                                participant_id=participant_id,
+                                trial=trial,
+                                condition=condition,
+                                time_interval_rel_start=0.0,
+                                time_interval_abs_start=w_start,
+                                time_interval_rel_end=w_end - w_start,
+                                time_interval_abs_end=w_end,
+                                task_moment=moment, recording_type='total',
+                                metric_name=metric_name, metric_value=metric_value,
+                                baseline_mean=bl, sample_size=f"{vas_n}",
+                            ))
+                        print(f"  VAS total [{moment}]: " + "  ".join(
+                            f"{k}={v:.2f}" for k, v in vas_metrics.items()
                         ))
 
                     # 30-s binned VAS — stim trials only (baseline kept whole)
@@ -347,33 +394,33 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                         )
                         CAL_vas.extend(vas_binned.to_dict('records'))
 
-                    print("  VAS total: " + "  ".join(
-                        f"{k}={v:.2f}" for k, v in vas_metrics.items()
-                    ))
-
                 # ── 6d. GSR/EDA (tonic/phasic) ──────────────────────────────
                 # Same task window / 30-s bins / baseline reference as the
                 # temporal HRV metrics above; results_gsr was computed once,
                 # before the per-trial loop.
-                metrics_gsr = get_eda_metrics(results_gsr, t_start=task_window[0], t_end=task_window[1])
-                gsr_n_clean, gsr_n_raw = masked_sample_counts(results_gsr, *task_window)
-                gsr_sample_size = f"{gsr_n_clean} / {gsr_n_raw}"
-                if condition == 'baseline':
-                    baseline_gsr_raw = metrics_gsr
+                for moment, (w_start, w_end) in tot_windows:
+                    metrics_gsr = get_eda_metrics(results_gsr, t_start=w_start, t_end=w_end)
+                    if moment == 'baseline':
+                        baseline_gsr_raw = metrics_gsr
+                    gsr_n_clean, gsr_n_raw = masked_sample_counts(results_gsr, w_start, w_end)
+                    gsr_sample_size = f"{gsr_n_clean} / {gsr_n_raw}"
 
-                for metric_name, metric_value in metrics_gsr.items():
-                    bl = (baseline_gsr_raw or {}).get(metric_name, float('nan'))
-                    CAL_gsr.extend(build_result_row(
-                        participant_id=participant_id,
-                        trial=trial,
-                        condition=condition,
-                        time_interval_rel_start=0.0,
-                        time_interval_abs_start=task_window[0],
-                        time_interval_rel_end=task_window[1] - task_window[0],
-                        time_interval_abs_end=task_window[1],
-                        task_moment=total_task_moment, recording_type='total',
-                        metric_name=metric_name, metric_value=metric_value,
-                        baseline_mean=bl, sample_size=gsr_sample_size,
+                    for metric_name, metric_value in metrics_gsr.items():
+                        bl = (baseline_gsr_raw or {}).get(metric_name, float('nan'))
+                        CAL_gsr.extend(build_result_row(
+                            participant_id=participant_id,
+                            trial=trial,
+                            condition=condition,
+                            time_interval_rel_start=0.0,
+                            time_interval_abs_start=w_start,
+                            time_interval_rel_end=w_end - w_start,
+                            time_interval_abs_end=w_end,
+                            task_moment=moment, recording_type='total',
+                            metric_name=metric_name, metric_value=metric_value,
+                            baseline_mean=bl, sample_size=gsr_sample_size,
+                        ))
+                    print(f"  GSR total [{moment}]: " + "  ".join(
+                        f"{k}={v:.4f}" for k, v in metrics_gsr.items()
                     ))
 
                 # 30-s binned GSR/EDA — block trials only (baseline kept whole)
@@ -383,10 +430,6 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
                         participant_id, baseline_gsr_raw or {}, bin_width=bin,
                     )
                     CAL_gsr.extend(gsr_binned.to_dict('records'))
-
-                print("  GSR total: " + "  ".join(
-                    f"{k}={v:.4f}" for k, v in metrics_gsr.items()
-                ))
 
             except Exception as trial_err:
                 import traceback

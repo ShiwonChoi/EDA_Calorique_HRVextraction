@@ -87,3 +87,40 @@ def label_bin(bin_center, windows):
         if window is not None and window[0] <= bin_center < window[1]:
             return phase_name
     return 'unclassified'
+
+
+# Seconds padded before/after the task (sound-play) phase when forming its
+# whole-phase 'total' window. Raw and unclamped: the -pad edge may reach into
+# the anticipation/countdown (or, if that is shorter than pad, the prior trial's
+# tail) and the +pad edge into early recovery — masking simply averages whatever
+# beats/samples actually fall inside.
+TASK_TOTAL_PAD = 60.0
+
+
+def total_windows(condition, task_window, df_events_t, pad=TASK_TOTAL_PAD):
+    """
+    (task_moment, (start, end)) windows for a trial's whole-phase 'total' rows.
+
+    Baseline trials keep a single ('baseline', task_window) spanning their whole
+    recording — the reference every other trial is corrected against. Block
+    trials instead get up to two totals, both derived from phase_windows:
+
+        ('task',     (task_start - pad, task_end + pad))  the sound-play phase
+                     padded by `pad` seconds on each side (raw, unclamped).
+        ('recovery', (recovery_start, recovery_end))      the whole rest phase.
+
+    A phase whose markers are absent (returned as None by phase_windows) is
+    skipped, so a malformed block trial may yield fewer than two totals.
+    """
+    if condition == 'baseline':
+        return [('baseline', (float(task_window[0]), float(task_window[1])))]
+
+    phases = phase_windows(df_events_t)
+    windows = []
+    task = phases.get('task')
+    if task is not None:
+        windows.append(('task', (task[0] - pad, task[1] + pad)))
+    recovery = phases.get('recovery')
+    if recovery is not None:
+        windows.append(('recovery', recovery))
+    return windows

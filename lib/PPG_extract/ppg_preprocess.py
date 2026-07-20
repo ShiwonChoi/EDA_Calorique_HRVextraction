@@ -94,6 +94,32 @@ def assign_trial_condition(df_events):
     return df
 
 
+def experiment_window(df_events):
+    """
+    Whole-experiment time span in seconds since Shimmer connect: the first and
+    last retained event across all trials.
+
+    Everything before the first event (e.g. electrode settling / pre-experiment
+    baseline) and after the last event (disconnection tail) falls outside this
+    window and is meant to be cropped away before any metric extraction.
+
+    Uses only rows with a valid `trial` (clean_events already keeps just the
+    ALLCOND markers, all of which are tagged), falling back to all rows if none
+    are tagged.
+
+    Returns:
+        (t_start_s, t_end_s) tuple in seconds, or None if no usable event
+        times exist.
+    """
+    ev = df_events.dropna(subset=["trial"]) if "trial" in df_events.columns else df_events
+    ms = ev["time_since_connected_ms"].dropna()
+    if ms.empty:
+        ms = df_events["time_since_connected_ms"].dropna()
+    if ms.empty:
+        return None
+    return float(ms.min()) / 1000.0, float(ms.max()) / 1000.0
+
+
 def merge_time(df_ppg):
     """
     Adds two zero-referenced time columns to df_ppg:
