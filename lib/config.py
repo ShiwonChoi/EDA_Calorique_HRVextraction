@@ -114,7 +114,7 @@ base_dir = Path(__file__).resolve().parents[1]
 DATA_DIR = base_dir / "Data"
 CORR_DIR = DATA_DIR / "Processed_PPG"
 
-# Participant folders: root of raw per-participant data (each SBSA_##/SBAA_## lives here)
+# Participant folders: root of raw per-participant data (each SBSA_##/SBA_## lives here)
 PARTICIPANTS_DIR = DATA_DIR
 
 # Output folder for processed PPG results
@@ -127,12 +127,12 @@ output_dir.mkdir(parents=True, exist_ok=True)
 output_file = output_dir / "processed_ppg_results.csv"
 
 
-def get_participant_paths(root=PARTICIPANTS_DIR, patterns=("SBSA_*", "SBAA_*")):
+def get_participant_paths(root=PARTICIPANTS_DIR, patterns=("SBSA_*", "SBA_*")):
     """Return sorted list of participant folders found under root.
 
     The sound-stress cohort uses two folder prefixes:
         SBSA_## — healthy controls
-        SBAA_## — tinnitus (acouphène) group
+        SBA_## — tinnitus (acouphène) group
     Both are collected. `patterns` may be a single glob string or an iterable
     of glob strings.
     """
@@ -154,7 +154,7 @@ GROUP_MAP = {
 def group_from_participant(participant_id):
     """Map a participant/folder id to its study-group code.
 
-    SBSA_* -> 'HC' (healthy controls); SBAA_* -> 'T' (tinnitus / acouphène).
+    SBSA_* -> 'HC' (healthy controls); SBA_* -> 'T' (tinnitus / acouphène).
     Returns pd.NA for anything that matches neither prefix.
     """
     pid = str(participant_id).upper()

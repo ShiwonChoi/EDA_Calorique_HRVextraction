@@ -185,7 +185,7 @@ def tag_ppg_trial_condition(df_ppg, df_events, participant_id):
 def load_and_clean_ppg(participants_path, show=False):
     """
     Args:
-        participants_path : Path to the SBSA_##/SBAA_## participant folder.
+        participants_path : Path to the SBSA_##/SBA_## participant folder.
         show               : If True, display raw signal quality plot after loading.
     """
     df_ppg_raw, df_events, participant_id = load_ppg(participants_path, show=show)

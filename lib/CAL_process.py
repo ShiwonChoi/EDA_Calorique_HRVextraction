@@ -450,7 +450,7 @@ def full_process_single(participant_path, use_physio=True, use_stat=False, show=
         df_vas  = pd.DataFrame(CAL_vas,  columns=OUTPUT_COLUMNS) if CAL_vas  else pd.DataFrame(columns=OUTPUT_COLUMNS)
         df_gsr  = pd.DataFrame(CAL_gsr,  columns=OUTPUT_COLUMNS) if CAL_gsr  else pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-        # Study-group tag (HC = SBSA controls, T = SBAA tinnitus), placed
+        # Study-group tag (HC = SBSA controls, T = SBA tinnitus), placed
         # right after the participant column.
         groupe = group_from_participant(participant_id)
         for _df in (df_temp, df_freq, df_vas, df_gsr):
