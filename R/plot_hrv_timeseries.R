@@ -228,14 +228,17 @@ compute_mean_and_band <- function(d, error_band = "sem", ci_level = CI_LEVEL) {
 # Logic: sort intervals by start time, then walk through them merging
 # neighbours that share the same task_moment into one continuous "segment".
 # We return a small table: one row per segment with its start, end and label.
-derive_event_segments <- function(dc) {
-  # First, one row per unique start time with its end + task_moment + condition.
+derive_event_segments <- function(dc, split_by = "condition") {
+  # First, one row per unique start time with its end + task_moment + the value
+  # of whatever column we are splitting figures by (condition OR trial OR ...).
+  # Because `dc` has already been filtered to a SINGLE split value upstream,
+  # `first(...)` here is exact — every row shares that same value.
   intervals <- dc %>%
     group_by(time_interval_rel_start) %>%
     summarise(
       end         = max(time_interval_rel_end),
       task_moment = first(task_moment),
-      condition   = first(condition),
+      split_label = first(.data[[split_by]]),
       .groups = "drop"
     ) %>%
     arrange(time_interval_rel_start)
@@ -251,11 +254,13 @@ derive_event_segments <- function(dc) {
       start       = min(time_interval_rel_start),
       end         = max(end),
       task_moment = first(task_moment),
-      condition   = first(condition),
+      split_label = first(split_label),
       .groups = "drop"
     ) %>%
-    # Label a "task" span with the condition name; otherwise use the moment.
-    mutate(label = ifelse(task_moment == "task", condition, task_moment)) %>%
+    # Label a "task" span with the split value (condition name or trial number);
+    # otherwise use the moment (e.g. "recovery").
+    mutate(label = ifelse(task_moment == "task",
+                          as.character(split_label), task_moment)) %>%
     arrange(start)
 
   return(segments)
@@ -273,7 +278,7 @@ derive_event_segments <- function(dc) {
 # `plot_df`     -> the aggregated table for all groups, with a `group` column.
 # `segments`    -> the event table from derive_event_segments().
 plot_one_condition <- function(plot_df, segments, metric, value_type,
-                               condition, error_band) {
+                               split_by, split_value, error_band) {
 
   # --- y-axis label: metric label + value_type suffix -----------------------
   base_lbl <- ifelse(metric %in% names(METRIC_LABELS),
@@ -333,7 +338,8 @@ plot_one_condition <- function(plot_df, segments, metric, value_type,
 
     # 7) titles, axis labels, and a clean theme.
     labs(
-      title = paste0(metric, " — ", condition, "  (band: ", band_lbl, ")"),
+      title = paste0(metric, " — ", split_by, " = ", split_value,
+                     "  (band: ", band_lbl, ")"),
       x = "Within-trial time (s) — interval start",
       y = y_lab
     ) +
@@ -352,9 +358,16 @@ plot_one_condition <- function(plot_df, segments, metric, value_type,
 # also inspect them interactively at the R console.
 plot_all_task_all_group <- function(df, metric, value_type = "raw",
                                     error_band = "sem",
-                                    conditions = NULL, groups = NULL,
+                                    split_by = "condition",
+                                    split_levels = NULL, groups = NULL,
                                     save = TRUE,
                                     figures_path = FIGURES_PATH) {
+
+  # `split_by` chooses WHAT each figure represents:
+  #   * "condition" -> one figure per experimental condition (the default),
+  #   * "trial"     -> one figure per trial slot, in numeric order, pooling
+  #                    whatever condition each participant saw in that slot.
+  # T vs HC are still overlaid within every figure (handled by the group loop).
 
   # 1) FILTER down to this metric / value_type.
   d <- filter_interval_data(df, metric, value_type)
@@ -364,12 +377,22 @@ plot_all_task_all_group <- function(df, metric, value_type = "raw",
     return(invisible(list()))
   }
 
-  # 2) Decide which conditions and groups to draw if the caller didn't say.
-  #    Default conditions = every non-baseline condition present.
-  if (is.null(conditions)) {
-    conditions <- unique(d$condition)
-    conditions <- conditions[conditions != "baseline"]
+  if (!split_by %in% names(d)) {
+    stop("split_by column '", split_by, "' not found. Available columns: ",
+         paste(names(d), collapse = ", "))
   }
+
+  # 2) Decide which split values and groups to draw if the caller didn't say.
+  #    Default = every value of the split column present in the data.
+  if (is.null(split_levels)) {
+    split_levels <- sort(unique(d[[split_by]]))
+    # baseline (trial 0) has no interval rows anyway, but when splitting by
+    # condition drop it explicitly so it never shows as an empty figure.
+    if (split_by == "condition") {
+      split_levels <- split_levels[split_levels != "baseline"]
+    }
+  }
+
   if (is.null(groups)) {
     groups <- sort(unique(d$groupe[!is.na(d$groupe)]))
   }
@@ -377,13 +400,13 @@ plot_all_task_all_group <- function(df, metric, value_type = "raw",
   # Make sure the output folder exists before we try to save into it.
   if (save) dir.create(figures_path, recursive = TRUE, showWarnings = FALSE)
 
-  figures <- list()   # we will collect one plot per condition here.
+  figures <- list()   # we will collect one plot per split value here.
 
-  # 3) Loop over conditions — one figure each.
-  for (condition in conditions) {
-    dc <- d %>% filter(condition == !!condition)   # !! = "use the variable"
+  # 3) Loop over the split values — one figure each.
+  for (lvl in split_levels) {
+    dc <- d %>% filter(.data[[split_by]] == lvl)   # keep only this split value
     if (nrow(dc) == 0) {
-      message("  (skip) condition ", condition, ": no data")
+      message("  (skip) ", split_by, " ", lvl, ": no data")
       next
     }
 
@@ -401,20 +424,20 @@ plot_all_task_all_group <- function(df, metric, value_type = "raw",
     if (length(per_group) == 0) next
     plot_df <- bind_rows(per_group)         # one long table for all groups
 
-    # 3b) Reconstruct the task/recovery event structure for this condition.
-    segments <- derive_event_segments(dc)
+    # 3b) Reconstruct the task/recovery event structure for this split value.
+    segments <- derive_event_segments(dc, split_by = split_by)
 
     # 3c) Build the figure.
     p <- plot_one_condition(plot_df, segments, metric, value_type,
-                            condition, error_band)
-    figures[[condition]] <- p
+                            split_by, lvl, error_band)
+    figures[[as.character(lvl)]] <- p
 
     # 3d) Save to disk. ggsave() writes whatever plot you hand it.
     if (save) {
       fname <- file.path(
         figures_path,
         paste0("timeseries_", metric, "_", value_type, "_",
-               error_band, "_", condition, ".png")
+               error_band, "_", split_by, "_", lvl, ".png")
       )
       ggsave(fname, plot = p, width = 12, height = 4, dpi = 150)
       message("  Saved: ", fname)
@@ -455,9 +478,25 @@ if (interactive()) {
     metric     = "RMSSD",
     value_type = "raw",
     error_band = "sem",   # or "ci" for a 95% confidence interval band
+    split_by   = "condition",   # <- the default; one figure per condition
     save       = TRUE
   )
 
-  # `figs` is a list keyed by condition. To view one on screen:
+  # --- 2b. SAME PIPELINE, but one figure per TRIAL (order-agnostic) -----------
+  # Each figure now pools whatever condition a participant saw in that trial
+  # slot, so it answers "how does the response change across trial order?"
+  # rather than "how does it differ by condition?". Trial 0 (baseline) has no
+  # interval rows and is skipped automatically.
+  figs_trial <- plot_all_task_all_group(
+    df,
+    metric     = "RMSSD",
+    value_type = "raw",
+    error_band = "sem",
+    split_by   = "trial",       # <- only change needed
+    save       = TRUE
+  )
+
+  # `figs` is a list keyed by the split value. To view one on screen:
   #   print(figs[[1]])
+  #   print(figs_trial[["1"]])   # trial keys are strings
 }
