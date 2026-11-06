@@ -1,204 +1,172 @@
-# Sound Stress — HRV, VAS & GSR/EDA extraction (`SoundStress_HRV`)
+# Sound Stress — subjective judgement: per-sound VAS extraction
 
-This branch processes the **Sound Stress** experiment: one continuous Shimmer
-PPG/GSR recording per participant (baseline + 6 stimulus blocks +
-post-recovery), plus a continuous subjective-stress VAS trace. It produces
-per-trial and 30-second-binned **temporal HRV**, **frequency HRV**, **VAS**,
-and **tonic/phasic GSR/EDA** metrics in a shared long-format schema.
+This branch processes the **Sound Stress - subjective judgement** experiment
+(2026_Automne): a continuous subjective-stress VAS trace recorded on a touch
+slider while 138 sounds are played. There is no HRV and no GSR/EDA in this
+branch. It produces **per-sound VAS metrics** (mean, mode, median, std) in a
+long-format table.
 
-## Cohort & groups
+## Participants
 
-Participant folders use two prefixes, mapped to a `groupe` code in every output:
-
-| Folder prefix | `groupe` | Meaning                       |
-|---------------|----------|-------------------------------|
-| `SBSA_##`     | `HC`     | Healthy controls              |
-| `SBAA_##`     | `T`      | Tinnitus group (acouphène)    |
-
-Both prefixes are discovered automatically by the batch runner.
+Participant folders are named `JS_##` (e.g. `JS_01`). The folder number is
+checked against the `participant=###` entry in the event log (see
+[Verification](#verification)); comparison is numeric, so `JS_07` matches `007`
+and `JS_10` matches `010`.
 
 ## Expected input (per participant folder)
 
-Flat layout, one continuous session per participant:
+Flat layout, one continuous session per participant (reference: `Data/JS_01`):
 
-- `shimmer_*.csv` — raw Shimmer PPG/GSR (`Internal ADC A13` = PPG, `GSR` = skin
-  resistance in kOhm, converted to conductance for EDA analysis).
-- `event_log_*_aligned.csv` — event log **aligned to the Shimmer clock** (used).
-  The non-`_aligned` `event_log_*.csv` (absolute clock) is **ignored**.
-- `touch_data_*.csv` — continuous VAS recording (subjective stress).
-- `Processed_PPG/<participant>/…_rr_intervals_corrigé.csv` — corrected RR
-  intervals (manually reviewed peaks). Used when present; otherwise auto peaks.
+- `event_log_*.csv` — event log. Columns: `event_number, event_label,
+  utc_timestamp, monotonic_s, elapsed_since_shimmer_s, elapsed_s, block, trial,
+  detail`.
+- `touch_data_*.csv` — continuous slider recording. Columns: `elapsed_s,
+  monotonic_s, position, touch_size, is_touching, timestamp_us`. `position`
+  (0–1) is NaN whenever `is_touching == 0`.
 - `distress_rating_*.csv/.xlsx` — **ignored**.
+
+Both files carry `monotonic_s`, the clock shared between the event log and the
+touch data; it is the only time reference used.
 
 ## Setup
 
-Requires Python 3.10+ and the packages in [`requirements.txt`](requirements.txt):
-**numpy**, **pandas**, **scipy**, **matplotlib**, **neurokit2** (PPG peak
-detection / signal processing / EDA decomposition; pulls in PyWavelets), and
-**cvxopt** (only exercised if GSR/EDA is run with `gsr_method='cvxeda'`;
-the default `'highpass'` method doesn't need it). Install with:
+Requires Python 3.10+ and the packages in [`requirements.txt`](requirements.txt).
+Install with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
+> Note: `lib/config.py` still imports `neurokit2`, which this branch does not
+> otherwise use. It must be installed (or that import removed) for the pipeline
+> to import.
+
 ## Running
 
 ```bash
-python main.py          # batch over all SBSA_*/SBAA_* folders
+python main.py          # batch over all JS_* folders in Data/
 ```
 
-Outputs are written to `Results/`:
+Single participant, with one plot per sound (opens one window per sound):
 
-| File                             | Content                          |
-|----------------------------------|----------------------------------|
-| `processed_ppg_results_temp.csv` | Temporal HRV                     |
-| `processed_ppg_results_freq.csv` | Frequency HRV (band power)       |
-| `processed_vas_results.csv`      | VAS subjective-stress statistics |
-| `processed_gsr_results.csv`      | Tonic/phasic GSR/EDA statistics  |
+```python
+from pathlib import Path
+from lib.CAL_process import full_process_single
 
-## Output schema (shared by all four CSVs)
+participant_id, df_vas, df_sound = full_process_single(Path("Data/JS_01"), show=True)
+```
 
-All four files are **long format** with one row per
-`(trial × condition × Metric × Value_type × recording window)`:
+Output is written to `Results/`:
 
-| Column                      | Description |
-|-----------------------------|-------------|
-| `participant`               | Folder name, e.g. `SBSA_02`. |
-| `groupe`                    | `HC` (SBSA control) or `T` (SBAA tinnitus). |
-| `trial`                     | `0` = baseline; `1`–`6` = stimulus blocks. |
-| `condition`                 | `baseline`, or `<block>_<design>` (see below). |
-| `time_interval_rel_start`   | Window start, seconds relative to the trial's task start. |
-| `time_interval_abs_start`   | Window start, seconds since Shimmer connection. |
-| `time_interval_rel_end`     | Window end, relative to trial task start. |
-| `time_interval_abs_end`     | Window end, seconds since Shimmer connection. |
-| `task_moment`               | Recording phase (see below). |
-| `recording_type`            | `total` (whole trial) or `interval` (a 30 s bin). |
-| `Metric`                    | The metric name (see per-file tables). |
-| `Value_type`                | `raw`, `diff`, `pct_change`, or `log_ratio`. |
-| `Value`                     | The numeric value. |
-| `sample_size`               | See per-file notes. |
-| `status`                    | `SUCCESS` or `FAILED`. |
-| `error`                     | Error string when `status == FAILED`, else empty. |
+| File                        | Content                              |
+|-----------------------------|--------------------------------------|
+| `processed_vas_results.csv` | Per-sound VAS metrics (long format)  |
 
-### `condition` values
+## Pipeline
 
-`baseline` for trial 0. For blocks 1–6, `condition = <block label>_<design>`,
-combining the sound label with the stimulus design, e.g.
-`quiet_individu`, `loud_individu`, `original_quatre_sons`,
-`loud_quatre_sons`, `quiet_quatre_sons`, `original_individu`.
+`full_process_single(participant_path, show=False)` in
+[`lib/CAL_process.py`](lib/CAL_process.py):
 
-### `recording_type` and `task_moment`
+1. **Load touch data** — `load_touch_vas` (`lib/Metric_extraction/VAS_extract.py`)
+   returns `monotonic_s`, `vas` (= `position × 100`, 0–100 scale) and
+   `is_touching`.
+2. **Verify and clean** — `load_and_clean_events`
+   (`lib/PPG_extract/load_and_clean_events.py`) loads the event log, runs
+   `verify_participant`, and cleans events and touch data on one clock.
+3. **Match sounds to touch data** — `match_sound_to_touch`
+   (`lib/Metric_extraction/match_sound.py`) returns one row per task sound with
+   its touch samples.
+4. **Per-sound loop** — plots the touch trace when `show=True`
+   (`lib/Plots_func/plot_sound.py`), then computes the metrics
+   (`lib/Metric_extraction/metric_derive.py`).
 
-- `total` rows cover the whole trial (first→last event). `task_moment` is
-  `baseline` for trial 0, otherwise `total`.
-- `interval` rows are sequential **30 s bins** (last bin may be shorter),
-  emitted for stimulus blocks only (baseline is kept whole). Each bin's
-  `task_moment` is the phase whose window contains the bin centre:
-  `anticipation` (block_start→countdown_start), `task`
-  (sound_play_start→sound_play_end), `recovery` (rest, or post_recovery for
-  block 6), or `unclassified`.
-- **VAS, HRV, and GSR bins share identical bin edges**, so rows can be joined
-  on `trial` + `time_interval_abs_start`/`_end`.
+Returns `(participant_id, df_vas, df_sound)`.
 
-### `Value_type` (baseline referencing)
+### Verification
 
-Each metric appears in four rows:
+`verify_participant(events, participants_path)` returns two booleans:
 
-- `raw` — the metric value itself.
-- `diff` — value minus the baseline reference.
-- `pct_change` — percent change vs baseline.
-- `log_ratio` — `ln(value / baseline)`.
+- **Participant:** the `detail` of the `experiment_start` row holds
+  `participant=###`; its number must equal the trailing number of the folder
+  name. A mismatch raises an error.
+- **Trials:** `trial` must run 1–138 (`MAX_TASK_TRIALS`), with 138 distinct
+  values. A mismatch only prints a warning.
 
-Baseline (trial 0) rows carry `raw` and set `diff`/`pct_change`/`log_ratio` to
-`0.0` by convention. Temporal HRV, VAS, and GSR are referenced against the
-baseline **trial's** whole-trial value; frequency HRV is referenced **per
-frequency** against the baseline window of the shared wavelet transform.
+### Cleaning
 
-## Per-file metrics
+`load_and_clean_events` keeps the span from `block_start` to `block_end`, and
+removes everything between `sound_gap_start`/`sound_gap_end` and
+`task_pause_start`/`task_pause_end` (these marker pairs are `EXCLUDE_PAIRS` in
+`lib/config.py`). The removed time is subtracted from later timestamps so the
+remaining timeline is continuous, and `monotonic_s` is zero-referenced to the
+first kept event; times are rounded to the microsecond. Events and touch
+samples are cut slightly differently at the gap boundaries:
 
-### `processed_ppg_results_temp.csv` — temporal HRV
+- **Events:** a gap starts exactly when a sound ends and ends exactly when the
+  next one starts, so only events strictly inside a gap or pause are removed;
+  the `sound_play_start`/`sound_play_end` events are kept.
+- **Touch samples:** cut over `[start, end)`, so a sample at the end of a sound
+  is not duplicated at the start of the next one once the gap is collapsed.
 
-Computed directly from the beat-to-beat (RR) interval series. These indicate
-**overall autonomic activity on the heart**, mixing sympathetic ("fight or
-flight") and parasympathetic/vagal ("rest and digest") influence — RMSSD in
-particular is the standard proxy for vagal/parasympathetic tone.
+Returns `(df_events, df_touch, skips)`, where `skips` lists the removed
+intervals (original start, end, duration).
 
-| `Metric`   | Meaning |
-|------------|---------|
-| `mean_HR`  | Average heart rate (beats per minute) over the window. |
-| `mean_RRI` | Average time between heartbeats (ms) — the inverse of `mean_HR`. |
-| `RMSSD`    | Root-mean-square of successive beat-to-beat differences (ms) — short-term variability; higher generally reflects **more vagal/parasympathetic activity** (calmer state). |
-| `SDNN`     | Standard deviation of all beat intervals (ms) — overall HRV across the whole window, mixing both branches of the autonomic nervous system. |
+### Sound matching
 
-`sample_size` = `"<clean beats> / <raw beats>"` in the window.
+`match_sound_to_touch` uses `block == 'task'` events only (the 14 training
+sounds are excluded). Each sound is a `sound_play_start`/`sound_play_end` pair
+with the same `trial`. Returned columns (`df_sound`):
 
-### `processed_ppg_results_freq.csv` — frequency HRV
+| Column       | Description |
+|--------------|-------------|
+| `trial`      | `1`–`138`. |
+| `category`   | Sound category (part of `detail` before `/`), e.g. `Bruits routiers`. |
+| `sound_name` | Sound file (part after `/`), e.g. `Circulation_8.wav`. |
+| `start_s`    | Sound start, cleaned zero-referenced `monotonic_s`. |
+| `end_s`      | Sound end, same clock. |
+| `duration_s` | `end_s - start_s`. |
+| `n_samples`  | Touch samples in the interval. |
+| `touch`      | DataFrame of the touch samples in `[start_s, end_s)` (`monotonic_s`, `vas`, `is_touching`, `t_rel_s`). |
 
-Band power from a continuous wavelet transform of the same RR-interval series
-(Task Force 1996 band definitions). These decompose HRV by oscillation speed,
-traditionally interpreted as separating slower sympathetic-linked rhythms from
-faster vagal/parasympathetic-linked rhythms — an interpretation the HRV
-literature treats as a useful heuristic rather than a strict law, since LF in
-particular is now known to reflect a mix of both branches.
+The last sound's interval is closed at its end.
+
+## Output schema
+
+Long format, one row per `(sound × Metric)`:
+
+| Column           | Description |
+|------------------|-------------|
+| `participant`    | Folder name, e.g. `JS_01`. |
+| `trial`          | `1`–`138`. |
+| `category`       | Sound category. |
+| `sound_name`     | Sound file name. |
+| `interval_start` | Sound start (cleaned `monotonic_s`, seconds). |
+| `interval_end`   | Sound end (cleaned `monotonic_s`, seconds). |
+| `task_moment`    | Always `task`. |
+| `Metric`         | `mean`, `mode`, `median` or `std`. |
+| `Value`          | The metric value (float, 0–100 VAS scale). |
+| `sample_size`    | Number of touch samples (`is_touching == 1`) in the interval. |
+| `status`         | `OK`, `NO_DATA` (no touch samples in the interval) or `FAILED`. |
+| `error`          | Error string when `status == FAILED`, else empty. |
+
+138 sounds × 4 metrics = 552 rows per participant.
+
+## Metrics
+
+Computed per sound over the touch samples where `is_touching == 1` (i.e.
+`position` is not NaN), on the 0–100 VAS scale
+(`get_vas_metrics` in `lib/Metric_extraction/metric_derive.py`):
 
 | `Metric` | Meaning |
 |----------|---------|
-| `VLF`    | Very-low-frequency power (0.003–0.04 Hz) — slow regulatory rhythms (e.g. thermoregulation, hormonal). |
-| `LF`     | Low-frequency power (0.04–0.15 Hz) — historically linked to sympathetic activity and baroreflex, but now considered a mixed sympathetic/vagal signal. |
-| `HF`     | High-frequency power (0.15–0.40 Hz) — tracks respiration-linked ("respiratory sinus arrhythmia") vagal/parasympathetic activity. |
+| `mean`   | Average VAS over the sound. |
+| `mode`   | Histogram mode: centre of the most populated bin of width `VAS_MODE_BIN_WIDTH` (1.0 on the 0–100 scale; set in `lib/config.py`). Used because `position` is continuous, so an exact-value mode is not meaningful. Ties go to the lowest bin. |
+| `median` | Median VAS over the sound — less sensitive to brief movements than the mean. |
+| `std`    | Sample standard deviation (`ddof=1`); NaN with fewer than 2 samples. |
 
-`sample_size` = `"<clean beats> / <raw beats>"`.
+## Plots
 
-### `processed_vas_results.csv` — subjective stress (VAS)
-
-The participant's own **self-reported, moment-to-moment stress rating**
-(0–100 slider), independent of any physiological signal.
-
-| `Metric`     | Meaning |
-|--------------|---------|
-| `VAS_mean`   | Average self-reported stress level over the window. |
-| `VAS_median` | Median self-reported stress level — less sensitive to brief spikes than the mean. |
-| `VAS_std`    | Variability of self-reported stress within the window. |
-
-`sample_size` = number of touch samples in the window.
-
-**VAS score** = `position × 100` (0–100 scale). The VAS clock (`elapsed_s`,
-zeroed to VAS-recording start) is shifted onto the Shimmer timeline via
-`elapsed_s + touchslider_recording_start` (from the aligned event log), so VAS
-windows match the HRV windows exactly. The `touch_size`, `is_touching`, and
-`timestamp_us` columns of `touch_data` are not used. If a participant has no
-`touch_data`/marker, VAS is skipped (empty rows) without failing HRV.
-
-### `processed_gsr_results.csv` — tonic/phasic GSR/EDA
-
-Computed from the Shimmer `GSR` channel (skin resistance, kOhm → converted to
-conductance, µS) after artifact removal, then split into a slow **tonic**
-component and a fast **phasic** component (`gsr_method`, default `'highpass'`).
-Both reflect **sweat-gland activity driven by the sympathetic nervous system
-only** — unlike HRV, EDA has no parasympathetic/vagal contribution, so it's a
-comparatively unambiguous arousal signal.
-
-**Tonic (skin conductance level, SCL)** — the slow-moving background level,
-reflecting sustained/overall sympathetic arousal (e.g. general stress level
-during a block, independent of any single moment):
-
-| `Metric`          | Meaning |
-|-------------------|---------|
-| `Tonic_SCL_mean`   | Average background skin conductance (µS) over the window — higher means more sustained sympathetic arousal. |
-| `Tonic_SCL_slope`  | Linear trend of the background level over the window (µS/s) — rising = building arousal/sensitization, falling = habituation/recovery. |
-
-**Phasic (skin conductance responses, SCRs)** — brief spikes on top of the
-tonic level, each one a discrete sympathetic "startle"/arousal event, either
-triggered by a specific stimulus or occurring spontaneously:
-
-| `Metric`                    | Meaning |
-|-----------------------------|---------|
-| `Phasic_SCR_count`          | Number of distinct skin-conductance-response spikes detected in the window. |
-| `Phasic_SCR_rate`           | Same count, normalized to responses per minute — comparable across windows of different length. |
-| `Phasic_SCR_amplitude_mean` | Average size (µS) of the detected responses — how strong each arousal spike is, on average. |
-| `Phasic_SCR_amplitude_sum`  | Total size (µS) of all detected responses added together — combined intensity of arousal in the window. |
-| `Phasic_AUC`                | Area under the phasic curve (µS·s) over the window — a single combined measure of both how many responses occurred and how large they were. |
-
-`sample_size` = `"<clean samples> / <raw samples>"` in the window (same
-convention as temporal HRV, but counting GSR samples instead of heartbeats).
+With `show=True`, `plot_sound_touch` (`lib/Plots_func/plot_sound.py`) draws, for
+each sound as it is processed, the VAS (0–100) against the cleaned
+`monotonic_s`, with dashed lines at the sound start (black) and end (red).
+Untouched stretches appear as gaps. It opens one blocking window per sound.
