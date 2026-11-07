@@ -55,8 +55,8 @@ def _in_any(t, starts, ends, include_start=False):
 
 def _removed_before(t, starts, ends):
     # total excluded time that ended at or before each t
-    cum = np.concatenate([[0.0], np.cumsum(ends - starts)])
-    return cum[np.searchsorted(ends, t, side="right")]
+    cumul = np.concatenate([[0.0], np.cumsum(ends - starts)])
+    return cumul[np.searchsorted(ends, t, side="right")]
 
 
 def apply_cuts(df, t0, t1, starts, ends, include_start=False):
@@ -115,8 +115,7 @@ def load_and_clean_events(touch_data, participants_path, show=False):
     df_events = df_events[~df_events["event_label"].isin(marker_labels)]
     df_touch = apply_cuts(touch_data, t0, t1, starts, ends, include_start=True)
 
-    # transform monotonic_s to zero-referenced 
-    # touch data is transformed to *100 registered values (done in load_touch_vas)
+    # zero-reference monotonic_s 
     origin = df_events["monotonic_s"].min()
     # rounded to the microsecond so float error cannot push a sample across a boundary
     df_events["monotonic_s"] = (df_events["monotonic_s"] - origin).round(6)

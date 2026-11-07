@@ -60,7 +60,7 @@ Output is written to `Results/`:
 
 | File                        | Content                              |
 |-----------------------------|--------------------------------------|
-| `processed_vas_results.csv` | Per-sound VAS metrics (long format)  |
+| `extracted_VAS_results.csv` | Per-sound VAS metrics (long format)  |
 
 ## Pipeline
 

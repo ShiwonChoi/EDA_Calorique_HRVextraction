@@ -68,7 +68,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 output_file = output_dir / "extracted_VAS_results.csv"
 
 
-def get_participant_paths(root=PARTICIPANTS_DIR, patterns=("SBSA_*", "SBA_*")):
+def get_participant_paths(root=PARTICIPANTS_DIR, patterns=("JS_*",)):
     """Return sorted list of participant folders found under root.
 
     The sound-stress cohort uses two folder prefixes:
@@ -93,13 +93,15 @@ GROUP_MAP = {
 
 
 # ============================================================================
-# UNIFIED OUTPUT SCHEMA — shared by CAL_temp and CAL_freq (total + interval)
+# OUTPUT SCHEMA — one row per sound per metric
 # ============================================================================
 OUTPUT_COLUMNS = [
-    'participant', 'trial', 'condition',
-    'time_interval_rel_start', 'time_interval_abs_start',
-    'time_interval_rel_end',   'time_interval_abs_end',
-    'task_moment', 'recording_type',
-    'Metric', 'Value_type', 'Value',
+    'participant', 'trial', 'category', 'sound_name',
+    'interval_start', 'interval_end',
+    'task_moment',
+    'Metric', 'Value',
     'sample_size', 'status', 'error',
 ]
+
+# Bin width (VAS 0-100 scale) used to compute the histogram mode of the VAS
+VAS_MODE_BIN_WIDTH = 1.0
