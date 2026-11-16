@@ -163,6 +163,7 @@ The output is long format, with one row per `(sound × Metric)`:
 | `task_moment`    | Always `task`. |
 | `Metric`         | Metric name (see [Metrics](#metrics)). |
 | `Value`          | The metric value. NaN when it cannot be computed. |
+| `unit`           | Unit of `Value`: `VAS (0-100)` (slider position), `s` (duration), `s from sound onset` (time point), `VAS/s` (rate) or `count`. Set in `VAS_METRIC_UNITS` (`lib/config.py`). |
 | `sample_size`    | Number of VAS samples during the sound. |
 | `status`         | The sound's flags (see [Status flags](#status-flags)). The same value appears on every row of a sound. |
 | `error`          | Why `Value` is missing for this metric, or a caveat about it. Empty when the value is valid. |
@@ -187,7 +188,15 @@ al. (1999). All parameters are in `lib/config.py`.
 
 | `Metric`  | Definition |
 |-----------|------------|
-| `t_start` | Start of the rise (s from sound onset): the **last upward crossing of 5 % of `i_max` before `t_90`** (`VAS_ONSET_FRAC`). An upward crossing is a sample above the threshold whose previous sample was at or below it, so a value carried over from the previous sound or a brief blip is not taken as the start. |
+| `t_start` | Start of the rise (s from sound onset): the **last upward crossing of the onset threshold before `t_90`**. An upward crossing is a sample above the threshold whose previous sample was at or below it, so a value carried over from the previous sound or a brief blip is not taken as the start. |
+
+**Onset threshold.** The threshold is `max(5 % of i_max, min(8, 50 % of i_max))`:
+
+- `VAS_ONSET_FRAC = 0.05` is the Lallemand 5 % threshold.
+- `VAS_REST_MAX = 8` is a resting tolerance. Many participants rest the slider at about 4–6 between sounds, not at 0, so any position up to 8 counts as rest.
+- `VAS_REST_CAP_FRAC = 0.5` caps the tolerance at half of `i_max`, so that low ratings (e.g. a judgement of 8) still get a `t_start`.
+
+The same threshold is the minimum level of a plateau.
 
 ### Phase 2: adjustment
 
@@ -244,7 +253,7 @@ The following flags describe why metrics are missing:
 | `NO_DATA`        | No VAS samples during the sound. | All NaN |
 | `NO_RESPONSE`    | The slider was never touched, or the VAS stayed below 5 with the finger on the slider less than 80 % of the time. | All NaN, except `i_max` when available |
 | `TOO_SHORT`      | The sound is shorter than the 2 s excluded from `i_max`. | All NaN |
-| `CARRY_OVER`     | The VAS never dropped below 5 % of `i_max`, so there is no `t_start`. | All NaN except `i_max` |
+| `CARRY_OVER`     | The VAS never dropped below the onset threshold, so there is no `t_start`. Typically the slider stayed at the previous sound's rating. | All NaN except `i_max` |
 | `ZERO_JUDGEMENT` | A valid judgement of 0 (see above). | Filled (0) |
 
 The following flags can be combined:
@@ -321,6 +330,9 @@ pattern.
    - `CARRY_OVER` and `JUMP` mean the timing or rate could not be measured.
    - A slider that wobbles across a 1-point bin edge can split a real hold into
      two bins, so the hold is missed as a plateau.
+   - A judgement barely above the resting level (about 10 or less) is hard to
+     separate from rest. The 8-point resting tolerance can treat it as rest, so
+     `t_start` then points to a later movement. JS_10 trial 74 is an example.
    - Check the `status` flags and the plot before using these sounds.
 4. **Duplicated timestamps.** About a third of the touch samples share their
    timestamp with the previous sample. Durations use each sample's real
@@ -331,6 +343,7 @@ pattern.
    literature (Lallemand et al., 1999). The others are our own choices, set
    from JS_01 and not validated across participants. They are all set in
    `lib/config.py`:
+   - the 8-point resting tolerance and its 50 % cap,
    - the 2 s exclusion and 2 s plateau minimum,
    - 1-point bins,
    - the 5-point zero-judgement limit and 80 % touch fraction,

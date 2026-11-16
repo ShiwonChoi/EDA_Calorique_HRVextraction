@@ -4,7 +4,7 @@ from pathlib import Path
 from lib.config import OUTPUT_COLUMNS, SOUND_PAD_S
 from lib.PPG_extract.load_and_clean_events import load_and_clean_events
 from lib.Metric_extraction.VAS_extract import load_touch_vas
-from lib.Metric_extraction.metric_derive import get_vas_phase_metrics
+from lib.Metric_extraction.metric_derive import get_vas_phase_metrics, metric_unit
 from lib.Metric_extraction.match_sound import match_sound_to_touch
 from lib.Plots_func.plot_sound import plot_sound_touch
 
@@ -73,6 +73,7 @@ def full_process_single(participant_path, show=True):
                 }
                 for metric_name, value in metrics.items():
                     CAL_vas.append({**base, 'Metric': metric_name, 'Value': float(value),
+                                    'unit': metric_unit(metric_name),
                                     'sample_size': n, 'status': status,
                                     'error': errors.get(metric_name, '')})
 
@@ -85,7 +86,7 @@ def full_process_single(participant_path, show=True):
                     'category': row.category, 'sound_name': row.sound_name,
                     'interval_start': row.start_s, 'interval_end': row.end_s,
                     'task_moment': 'task', 'Metric': np.nan, 'Value': np.nan,
-                    'sample_size': 0,
+                    'unit': '', 'sample_size': 0,
                     'status': 'FAILED', 'error': str(sound_err),
                 })
 

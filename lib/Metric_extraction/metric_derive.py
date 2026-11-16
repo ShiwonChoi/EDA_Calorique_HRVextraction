@@ -1,9 +1,12 @@
+import re
+
 import numpy as np
 
 from lib.config import (
     VAS_MODE_BIN_WIDTH, VAS_IMAX_EXCLUDE_S, VAS_ONSET_FRAC, VAS_RISE_FRAC,
     VAS_PLATEAU_MIN_S, VAS_NO_RESPONSE, VAS_PEAK_MARGIN, VAS_SPIKE_MAX_S,
-    VAS_JUMP_MAX_S, VAS_MIN_TOUCH_FRAC,
+    VAS_JUMP_MAX_S, VAS_MIN_TOUCH_FRAC, VAS_METRIC_UNITS,
+    VAS_REST_MAX, VAS_REST_CAP_FRAC,
 )
 from lib.Plots_func.plot_sound import _plot_histogram_mode
 
@@ -16,6 +19,12 @@ def _histogram_mode(v, bin_width=VAS_MODE_BIN_WIDTH, plot=True, **plot_kwargs):
     if plot and plot_kwargs:
         _plot_histogram_mode(v, bin_width, mode, **plot_kwargs)
     return mode
+
+
+def metric_unit(name):
+    """Unit of a metric; per-plateau metrics (rise_dur_2, ...) use their base name."""
+    base = re.sub(r"_\d+$", "", str(name))
+    return VAS_METRIC_UNITS.get(name, VAS_METRIC_UNITS.get(base, ""))
 
 
 def get_vas_metrics(vas):
@@ -205,14 +214,17 @@ def get_vas_phase_metrics(t, vas, touching=None, duration=None, plot_kwargs=None
                            "NO_RESPONSE", n, segments)
         _zero_judgement(t, v, late, metrics, segments, hist_kwargs)
         return metrics, "ZERO_JUDGEMENT", n, segments, errors
-    thr_lo, thr_hi = VAS_ONSET_FRAC * i_max, VAS_RISE_FRAC * i_max
+    # onset threshold: 5 % of i_max, but at least the resting tolerance (participants
+    # often rest the slider at ~4-6, not 0), capped at half of i_max for low ratings
+    thr_lo = max(VAS_ONSET_FRAC * i_max, min(VAS_REST_MAX, VAS_REST_CAP_FRAC * i_max))
+    thr_hi = VAS_RISE_FRAC * i_max
     flags = []
 
     # ---- phase 1: t_start = last upward crossing of thr_lo before t_90 -------
     ups = _upward_crossings(v, thr_lo)
     if ups.size == 0:
         return _finish(metrics, errors,
-                       f"carry-over: VAS never dropped to 5 % of i_max ({thr_lo:.1f}), "
+                       f"carry-over: VAS never dropped to the onset threshold ({thr_lo:.1f}), "
                        f"so no rise onset (t_start) could be found",
                        "CARRY_OVER", n, segments)
     i90 = _first(v >= thr_hi, ups[0])

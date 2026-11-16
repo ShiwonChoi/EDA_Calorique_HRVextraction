@@ -23,7 +23,7 @@ def batch_process_all(participants_dir=DATA_DIR):
         print(f"\n[{i}/{len(participant_paths)}] Processing: {p_path.name} ...")
 
         try:
-            _, df_vas, df_sound = full_process_single(p_path, show=True)
+            _, df_vas, df_sound = full_process_single(p_path, show=False)
         except Exception as e:
             print(f"  -> FAILED: {e}")
             failed_participants.append(p_path.name)

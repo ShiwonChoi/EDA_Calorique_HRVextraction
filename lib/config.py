@@ -103,9 +103,26 @@ OUTPUT_COLUMNS = [
     'participant', 'trial', 'category', 'sound_name',
     'interval_start', 'interval_end',
     'task_moment',
-    'Metric', 'Value',
+    'Metric', 'Value', 'unit',
     'sample_size', 'status', 'error',
 ]
+
+# Unit of each VAS metric (written to the 'unit' column of the output).
+# Per-plateau metrics (<name>_1, <name>_2, ...) take the unit of <name>.
+VAS_METRIC_UNITS = {
+    'i_max':         'VAS (0-100)',
+    't_start':       's from sound onset',
+    't_90':          's from sound onset',
+    'rise_dur':      's',
+    'rise_rate':     'VAS/s',
+    'n_plateaus':    'count',
+    'n_changes':     'count',
+    'n_up':          'count',
+    'n_down':        'count',
+    'plateau_level': 'VAS (0-100)',
+    'plateau_dur':   's',
+    'plateau_std':   'VAS (0-100)',
+}
 
 # Bin width (VAS 0-100 scale) used to compute the histogram mode of the VAS
 VAS_MODE_BIN_WIDTH = 1.0
@@ -113,7 +130,9 @@ VAS_MODE_BIN_WIDTH = 1.0
 # ---- three-phase VAS metrics (latency -> adjustment -> judgement) ----------
 # Thresholds follow the time-intensity trapezoid (Lallemand et al., 1999)
 VAS_IMAX_EXCLUDE_S = 2.0   # i_max ignores the first N s (carry-over from previous sound)
-VAS_ONSET_FRAC     = 0.05  # t_start: upward crossing of 5 % of i_max
+VAS_ONSET_FRAC     = 0.05  # t_start: upward crossing of 5 % of i_max ...
+VAS_REST_MAX       = 10.0   #   ... but at least 10 (resting tolerance: slider often rests at ~4-6) ...
+VAS_REST_CAP_FRAC  = 0.50  #   ... capped at 50 % of i_max so low ratings keep a t_start
 VAS_RISE_FRAC      = 0.90  # t_90: first reach of 90 % of i_max (also 90 % of each plateau step)
 VAS_PLATEAU_MIN_S  = 2.0   # plateau = same histogram bin for >= N s consecutively
 VAS_NO_RESPONSE    = 5.0   # i_max below this (VAS points) = near-0 sound:
