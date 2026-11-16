@@ -9,15 +9,6 @@ from lib.CAL_process import full_process_single
 # ============================================================================
 
 def batch_process_all(participants_dir=DATA_DIR):
-    """
-    Process all judge-sound participant folders (JS_##) with full_process_single
-    and return one consolidated long-format DataFrame (schema = OUTPUT_COLUMNS) of
-    per-sound VAS metrics (mean, mode, median, std) for the whole cohort.
-
-    A participant counts as failed when no sound could be matched to touch data
-    (missing files, wrong participant id, unbalanced markers, ...). Sounds that
-    fail or have no touch samples are kept in the output as FAILED / NO_DATA rows.
-    """
     participant_paths = get_participant_paths(root=participants_dir)
 
     print("=" * 60)
@@ -44,9 +35,9 @@ def batch_process_all(participants_dir=DATA_DIR):
             continue
 
         all_vas.append(df_vas)
-        n_bad = int((df_vas["status"] != "OK").sum())
+        n_missing = int(df_vas["Value"].isna().sum())
         print(f"  -> SUCCESS  ({len(df_sound)} sounds, {len(df_vas)} vas rows"
-              + (f", {n_bad} FAILED/NO_DATA rows" if n_bad else "") + ")")
+              + (f", {n_missing} missing values (see 'error')" if n_missing else "") + ")")
 
     print()
     print("=" * 60)

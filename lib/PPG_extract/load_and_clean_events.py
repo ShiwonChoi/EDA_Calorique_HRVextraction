@@ -41,30 +41,10 @@ def _paired_intervals(events, start_label, end_label):
     return list(zip(s, e))
 
 
-def _in_any(t, starts, ends, include_start=False):
-    if len(starts) == 0:
-        return np.zeros(len(t), dtype=bool)
-    # events: strictly inside an interval, so boundary events are kept
-    # (sound_gap_start == sound_play_end, sound_gap_end == next sound_play_start in time).
-    # touch samples: [start, end), so a sample at the end of a sound is not duplicated
-    # at the start of the next sound once the gap is collapsed.
-    side = "right" if include_start else "left"
-    idx = np.searchsorted(starts, t, side=side) - 1
-    return (idx >= 0) & (t < ends[np.clip(idx, 0, None)])
-
-
-def _removed_before(t, starts, ends):
-    # total excluded time that ended at or before each t
-    cumul = np.concatenate([[0.0], np.cumsum(ends - starts)])
-    return cumul[np.searchsorted(ends, t, side="right")]
-
-
-def apply_cuts(df, t0, t1, starts, ends, include_start=False):
-    t = df["monotonic_s"].to_numpy(float)
-    keep = (t >= t0) & (t <= t1) & ~_in_any(t, starts, ends, include_start)
-    out = df.loc[keep].copy()
-    out["monotonic_s"] = t[keep] - _removed_before(t[keep], starts, ends)
-    return out
+def _trim(df, t0, t1):
+    # keep rows from block start to block end (inclusive); time is NOT collapsed
+    t = df["monotonic_s"].astype(float)
+    return df.loc[(t >= t0) & (t <= t1)].copy()
 
 
 def load_and_clean_events(touch_data, participants_path, show=False):
@@ -97,36 +77,40 @@ def load_and_clean_events(touch_data, participants_path, show=False):
     if pd.isna(t0) or pd.isna(t1):
         raise ValueError("block_start / block_end marker missing")
 
-    # trim out and track all skips due to taking out sound_gap and task_pause
+    # record sound_gap and task_pause intervals as skips; they are KEPT in the data
+    # (the silence around each sound is used for plotting)
     intervals = []
     for a, b in EXCLUDE_PAIRS:
-        intervals += _paired_intervals(events, a, b)
-    intervals = sorted((max(s, t0), min(e, t1)) for s, e in intervals if e > t0 and s < t1)
-    starts = np.array([s for s, _ in intervals], dtype=float)
-    ends = np.array([e for _, e in intervals], dtype=float)
+        kind = a.removesuffix("_start")
+        intervals += [(s, e, kind) for s, e in _paired_intervals(events, a, b)]
+    intervals = sorted((max(s, t0), min(e, t1), k) for s, e, k in intervals if e > t0 and s < t1)
+    starts = np.array([s for s, _, _ in intervals], dtype=float)
+    ends = np.array([e for _, e, _ in intervals], dtype=float)
     if len(starts) > 1 and np.any(starts[1:] < ends[:-1]):
         raise ValueError("Overlapping sound_gap / task_pause intervals")
-    skips = pd.DataFrame({"start": starts, "end": ends, "duration": ends - starts})
 
-    # apply all trimming and skips to touch_data
-    df_events = apply_cuts(events, t0, t1, starts, ends)
-    # the gap / pause marker rows themselves are no longer needed
-    marker_labels = [lab for pair in EXCLUDE_PAIRS for lab in pair]
-    df_events = df_events[~df_events["event_label"].isin(marker_labels)]
-    df_touch = apply_cuts(touch_data, t0, t1, starts, ends, include_start=True)
+    # trim events and touch data to the task block (no gaps removed)
+    df_events = _trim(events, t0, t1)
+    df_touch = _trim(touch_data, t0, t1)
 
-    # zero-reference monotonic_s 
-    origin = df_events["monotonic_s"].min()
+    # zero-reference monotonic_s (events, touch and skips share the same clock)
+    origin = df_events["monotonic_s"].astype(float).min()
     # rounded to the microsecond so float error cannot push a sample across a boundary
     df_events["monotonic_s"] = (df_events["monotonic_s"] - origin).round(6)
     df_touch["monotonic_s"] = (df_touch["monotonic_s"] - origin).round(6)
     df_events = df_events.reset_index(drop=True)
     df_touch = df_touch.reset_index(drop=True)
+    skips = pd.DataFrame({
+        "type":     [k for _, _, k in intervals],
+        "start":    (starts - origin).round(6),
+        "end":      (ends - origin).round(6),
+        "duration": ends - starts,
+    })
 
     if show:
         print(f"  Loaded {participants_path.name} | events {len(events)}->{len(df_events)} "
               f"| touch {len(touch_data)}->{len(df_touch)} "
-              f"| removed {skips['duration'].sum():.1f}s in {len(skips)} gaps/pauses")
+              f"| kept {len(skips)} gaps/pauses ({skips['duration'].sum():.1f}s)")
 
     # return cleaned events, cleaned touch
     return df_events, df_touch, skips

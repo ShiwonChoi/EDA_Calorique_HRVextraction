@@ -30,7 +30,8 @@ ALLCOND = [
 ]
 
 
-# paired markers whose enclosed events/samples are removed
+# paired markers recorded as skips (silence between sounds / task pauses).
+# They are kept in the events and VAS data, only logged in `skips`.
 EXCLUDE_PAIRS = [
     ("sound_gap_start", "sound_gap_end"),
     ("task_pause_start", "task_pause_end"),
@@ -40,6 +41,9 @@ EXCLUDE_PAIRS = [
 # VAS PARAMETERS
 # ============================================================================
 MAX_TASK_TRIALS = 138
+
+# seconds of VAS data shown before and after each sound in the sound plots
+SOUND_PAD_S = 3.0
 
 
 # Pathways
@@ -105,3 +109,15 @@ OUTPUT_COLUMNS = [
 
 # Bin width (VAS 0-100 scale) used to compute the histogram mode of the VAS
 VAS_MODE_BIN_WIDTH = 1.0
+
+# ---- three-phase VAS metrics (latency -> adjustment -> judgement) ----------
+# Thresholds follow the time-intensity trapezoid (Lallemand et al., 1999)
+VAS_IMAX_EXCLUDE_S = 2.0   # i_max ignores the first N s (carry-over from previous sound)
+VAS_ONSET_FRAC     = 0.05  # t_start: upward crossing of 5 % of i_max
+VAS_RISE_FRAC      = 0.90  # t_90: first reach of 90 % of i_max (also 90 % of each plateau step)
+VAS_PLATEAU_MIN_S  = 2.0   # plateau = same histogram bin for >= N s consecutively
+VAS_NO_RESPONSE    = 5.0   # i_max below this (VAS points) = near-0 sound:
+VAS_MIN_TOUCH_FRAC = 0.80  #   finger on slider >= this fraction -> ZERO_JUDGEMENT, else NO_RESPONSE
+VAS_PEAK_MARGIN    = 10.0  # i_max > highest plateau + N points -> peak excursion, then:
+VAS_SPIKE_MAX_S    = 0.30  #   excursion shorter than N s -> SPIKE, otherwise -> OVERSHOOT
+VAS_JUMP_MAX_S     = 0.05  # rise faster than N s = tap/jump -> rise_rate NaN, JUMP flag

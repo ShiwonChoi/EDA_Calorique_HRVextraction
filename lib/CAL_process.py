@@ -1,15 +1,15 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from lib.config import OUTPUT_COLUMNS
+from lib.config import OUTPUT_COLUMNS, SOUND_PAD_S
 from lib.PPG_extract.load_and_clean_events import load_and_clean_events
 from lib.Metric_extraction.VAS_extract import load_touch_vas
-from lib.Metric_extraction.metric_derive import get_vas_metrics
+from lib.Metric_extraction.metric_derive import get_vas_phase_metrics
 from lib.Metric_extraction.match_sound import match_sound_to_touch
 from lib.Plots_func.plot_sound import plot_sound_touch
 
 
-def full_process_single(participant_path, show=False):
+def full_process_single(participant_path, show=True):
     """
     Process one participant's continuous VAS recording.
 
@@ -19,7 +19,9 @@ def full_process_single(participant_path, show=False):
 
     Returns:
         participant_id (str)         : Participant identifier (e.g. "JS_##").
-        df_vas         (pd.DataFrame): VAS rows, schema = OUTPUT_COLUMNS.
+        df_vas         (pd.DataFrame): VAS rows, schema = OUTPUT_COLUMNS; one row
+                                       per sound x metric, `error` explains a
+                                       missing Value.
         df_sound       (pd.DataFrame): One row per sound (trial, category,
                                        sound_name, start_s, end_s, duration_s,
                                        n_samples, touch).
@@ -45,29 +47,34 @@ def full_process_single(participant_path, show=False):
         df_sound = match_sound_to_touch(df_events, df_touch)
         print(f"  Matched {len(df_sound)} sounds to touch data")
 
-        # 4. Per-sound loop: mean / mode / median / std of the VAS over the sound interval
+        # 4. Per-sound loop: three-phase VAS metrics (latency -> adjustment -> judgement)
         for row in df_sound.itertuples():
             try:
-                # raw position over the sound interval
-                plot_sound_touch(row.touch, row.trial, row.category, row.sound_name,
-                                 row.start_s, row.end_s, show=show)
+                labels = dict(trial=row.trial, category=row.category,
+                              sound_name=row.sound_name, participant=participant_id)
 
-                # touch samples only while the slider is touched (position not NaN)
-                touch = row.touch[row.touch["is_touching"] == 1]
+                # metrics over the sound interval (also plots the histogram of the mode)
+                metrics, status, n, segments, errors = get_vas_phase_metrics(
+                    row.touch["t_rel_s"].to_numpy(float), row.touch["vas"].to_numpy(float),
+                    touching=row.touch["is_touching"].to_numpy(),
+                    duration=row.duration_s,
+                    plot_kwargs={**labels, "show": show})
 
-                metrics, n = get_vas_metrics(touch["vas"].to_numpy(float))
+                # raw position over silence -> sound -> silence, with phase markers
+                plot_sound_touch(row.touch_context, row.trial, row.category, row.sound_name,
+                                 row.start_s, row.end_s, skips=skips, pad_s=SOUND_PAD_S,
+                                 segments=segments, participant=participant_id, show=show)
+
                 base = {
                     'participant': participant_id, 'trial': row.trial,
                     'category': row.category, 'sound_name': row.sound_name,
                     'interval_start': row.start_s, 'interval_end': row.end_s,
                     'task_moment': 'task',
                 }
-                if not metrics:
-                    CAL_vas.append({**base, 'Metric': np.nan, 'Value': np.nan,
-                                    'sample_size': 0, 'status': 'NO_DATA', 'error': ''})
                 for metric_name, value in metrics.items():
                     CAL_vas.append({**base, 'Metric': metric_name, 'Value': float(value),
-                                    'sample_size': n, 'status': 'OK', 'error': ''})
+                                    'sample_size': n, 'status': status,
+                                    'error': errors.get(metric_name, '')})
 
             except Exception as sound_err:
                 import traceback
