@@ -145,6 +145,7 @@ def _zero_judgement(t, v, late, metrics, segments, hist_kwargs):
     # time each sample lasts (until the next sample); robust to irregular sampling
     sample_dur = np.diff(tl, append=tl[-1])
     metrics.update(
+        mode=level,
         plateau_level=level,
         plateau_dur=float(sample_dur[vl < VAS_NO_RESPONSE].sum()),
         plateau_std=float(np.std(vl, ddof=1)) if vl.size >= 2 else np.nan,
@@ -184,7 +185,7 @@ def get_vas_phase_metrics(t, vas, touching=None, duration=None, plot_kwargs=None
     # plateau 1 metrics are always reported so every sound has the same core rows
     metrics = dict(i_max=nan, t_start=nan, t_90=nan, rise_dur=nan, rise_rate=nan,
                    n_plateaus=nan, n_changes=nan, n_up=nan, n_down=nan,
-                   plateau_level=nan, plateau_dur=nan, plateau_std=nan,
+                   mode=nan, plateau_level=nan, plateau_dur=nan, plateau_std=nan,
                    plateau_level_1=nan, rise_dur_1=nan, rise_rate_1=nan)
 
     if n_raw < 2:
@@ -266,7 +267,8 @@ def get_vas_phase_metrics(t, vas, touching=None, duration=None, plot_kwargs=None
         else:
             msg = (f"no plateau: no value held >= {VAS_PLATEAU_MIN_S:g} s between t_start "
                    f"({t_start:.1f} s) and sound end ({dur:.1f} s)")
-        for name in ("n_plateaus", "plateau_dur", "plateau_level_1", "rise_dur_1", "rise_rate_1"):
+        for name in ("n_plateaus", "plateau_level", "plateau_dur", "plateau_level_1",
+                     "rise_dur_1", "rise_rate_1"):
             errors[name] = msg
     elif len(pl) >= 2:
         flags.append("MULTI_PLATEAU")
@@ -300,13 +302,16 @@ def get_vas_phase_metrics(t, vas, touching=None, duration=None, plot_kwargs=None
         segments["rises"].append(dict(k=k, t_from=float(t[i_from]), t_reach=float(t[i_reach]),
                                       v_reach=float(v[i_reach])))
 
-    # ---- phase 3: plateau level (mode from t_start), duration, std ----------
+    # ---- phase 3: mode, plateau level/duration, std --------------------------
+    # mode: most frequent 1-point bin from t_start, no minimum duration
     if hist_kwargs:  # per-sample durations (timestamps can repeat) -> dwell time
         hist_kwargs.setdefault("dt", np.diff(t[i_start:], append=t[-1]))
-    mode = _histogram_mode(v[i_start:], plot=bool(hist_kwargs), **hist_kwargs)
-    mode_bin = int(np.floor(mode / VAS_MODE_BIN_WIDTH))
-    metrics["plateau_level"] = mode
-    metrics["plateau_dur"] = float(sum(p["dur"] for p in pl if p["bin"] == mode_bin))
+    metrics["mode"] = _histogram_mode(v[i_start:], plot=bool(hist_kwargs), **hist_kwargs)
+    # plateau_level: the plateau (>= VAS_PLATEAU_MIN_S) holding the most time
+    if pl:
+        main = max(pl, key=lambda p: p["dur"])
+        metrics["plateau_level"] = main["level"]
+        metrics["plateau_dur"] = main["dur"]
     if i90 is not None:
         if n - i90 >= 2:
             metrics["plateau_std"] = float(np.std(v[i90:], ddof=1))

@@ -119,6 +119,7 @@ VAS_METRIC_UNITS = {
     'n_changes':     'count',
     'n_up':          'count',
     'n_down':        'count',
+    'mode':          'VAS (0-100)',
     'plateau_level': 'VAS (0-100)',
     'plateau_dur':   's',
     'plateau_std':   'VAS (0-100)',

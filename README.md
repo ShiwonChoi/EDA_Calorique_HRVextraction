@@ -168,7 +168,7 @@ The output is long format, with one row per `(sound × Metric)`:
 | `status`         | The sound's flags (see [Status flags](#status-flags)). The same value appears on every row of a sound. |
 | `error`          | Why `Value` is missing for this metric, or a caveat about it. Empty when the value is valid. |
 
-Every sound has the same 15 core rows. Each additional plateau adds 3 more rows
+Every sound has the same 16 core rows. Each additional plateau adds 3 more rows
 (`plateau_level_k`, `rise_dur_k`, `rise_rate_k`).
 
 ## Metrics
@@ -222,8 +222,9 @@ plateaus at 61 and then 73, `rise_dur` is about 10.8 s, while `rise_dur_1` and
 
 | `Metric`        | Definition |
 |-----------------|------------|
-| `plateau_level` | The level the slider stayed at longest from `t_start` to the end of the sound, from a histogram with 1-point bins (`VAS_MODE_BIN_WIDTH`). Bins include their lower edge but not their upper edge, so 85.6 falls in bin [85, 86). The value reported is the **median of the samples inside the most populated bin**, i.e. the value actually held, not the bin centre. |
-| `plateau_dur`   | Total time spent in plateaus (≥ 2 s) at the `plateau_level` bin. |
+| `mode`          | The level the slider stayed at longest from `t_start` to the end of the sound, from a histogram with 1-point bins (`VAS_MODE_BIN_WIDTH`), with **no minimum duration** and independent of plateau detection. Bins include their lower edge but not their upper edge, so 85.6 falls in bin [85, 86). The value reported is the **median of the samples inside the most populated bin**, i.e. the value actually held, not the bin centre. If the VAS stays at its `t_start` value, that is the mode. Always computed once `t_start` exists, even for `NO_PLATEAU`. |
+| `plateau_level` | Level of the plateau (≥ 2 s, `VAS_PLATEAU_MIN_S`) that holds the most total time after `t_start`: the median VAS of that plateau. It can equal `mode`, but differs when a brief-but-frequent value is not held for 2 s. NaN when there is no plateau. |
+| `plateau_dur`   | Total time of that plateau (same-bin plateaus are merged). NaN when there is no plateau. |
 | `plateau_std`   | Standard deviation of the VAS from `t_90` to the end of the sound (`ddof=1`). |
 
 ### Zero judgements
@@ -233,7 +234,7 @@ the finger is on the slider (`is_touching == 1`) for at least 80 % of the sound
 (`VAS_MIN_TOUCH_FRAC`), the sound is a **valid judgement of 0**. This is common
 for relaxing sounds. It is not an error:
 
-- `plateau_level` is the median VAS after 2 s, so about 0.
+- `mode` and `plateau_level` are the median VAS after 2 s, so about 0.
 - `plateau_dur` is the time spent below 5.
 - `n_plateaus` is 1.
 - Every other metric is **0**, and `error` is empty.
@@ -301,8 +302,8 @@ pattern.
    metrics apart:
    - The overall rise (`t_90`, `rise_dur`, `rise_rate`) is measured against
      `i_max`, which may belong to any plateau or excursion.
-   - `plateau_level` is simply the level held longest, which is not
-     necessarily the final judgement.
+   - `mode` and `plateau_level` are simply the levels held longest, which are
+     not necessarily the final judgement.
    - `plateau_std` mixes several levels.
    - Brief holds under 2 s between plateaus are not counted.
 
@@ -317,7 +318,7 @@ pattern.
      (`NO_PLATEAU`).
    - Short sounds may not reach `t_90` (`NO_T90`).
 
-   Values computed on short sounds, such as `plateau_level` without a held
+   Values computed on short sounds, such as `mode` without a held
    plateau, describe an unfinished judgement. The `error` column states the
    timing constraint.
 3. **Atypical judgements.** When a judgement does not follow delay →

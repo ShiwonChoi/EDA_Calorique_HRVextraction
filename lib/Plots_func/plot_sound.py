@@ -101,7 +101,7 @@ def _plot_histogram_mode(v, bin_width, mode, trial, category, sound_name,
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.bar(edges[:-1], heights, width=bin_width, align="edge", color=colors,
            edgecolor="white", lw=0.5)
-    ax.axvline(mode, color="k", ls="--", lw=1, label=f"plateau_level = {mode:.1f}")
+    ax.axvline(mode, color="k", ls="--", lw=1, label=f"mode = {mode:.1f}")
     ax.set_xlim(min(lo, 0), max(hi, 100))
     ax.set_xlabel("VAS position (0-100)")
     ax.set_ylabel("Samples" if dt is None else "Dwell time (s)")
